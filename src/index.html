@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Study Hall</title>
+  <link rel="stylesheet" href="../node_modules/katex/dist/katex.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body data-theme="light">
+  <div class="app">
+    <header id="appbar"></header>
+    <div id="ribbon"></div>
+    <div class="workspace">
+      <aside id="nav"></aside>
+      <main id="main"></main>
+    </div>
+  </div>
+  <div id="modal-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="../node_modules/katex/dist/katex.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

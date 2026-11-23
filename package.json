@@ -1,0 +1,55 @@
+{
+  "name": "study-hall",
+  "productName": "Study Hall",
+  "version": "2.2.0",
+  "description": "Class notebooks that turn photos into notes, flashcards, practice tests and study guides.",
+  "main": "main.js",
+  "private": true,
+  "author": "Study Hall",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron test/smoke-main.js",
+    "dist": "electron-builder --win nsis",
+    "dist:linux": "electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && mv dist/win-unpacked \"dist/Study Hall\" && node build/stamp-exe.mjs \"dist/Study Hall/Study Hall.exe\" && cd build && makensis -V2 -DVERSION=$npm_package_version -DAPPDIR=\"../dist/Study Hall\" -DOUTFILE=\"../dist/Study Hall Setup $npm_package_version.exe\" installer.nsi",
+    "docs": "node build/make-docs.mjs"
+  },
+  "dependencies": {
+    "katex": "^0.16.11",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "resedit": "^3.1.1",
+    "pe-library": "^2.0.3"
+  },
+  "build": {
+    "appId": "com.studyhall.app",
+    "productName": "Study Hall",
+    "files": [
+      "main.js",
+      "preload.js",
+      "quizlet-import.js",
+      "notes/**/*",
+      "src/**/*",
+      "node_modules/katex/dist/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.education"
+    },
+    "linux": {
+      "target": "AppImage",
+      "category": "Education"
+    }
+  }
+}
