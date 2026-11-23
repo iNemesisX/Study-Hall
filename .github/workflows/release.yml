@@ -45,6 +45,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      # dmg-license is a macOS-only helper electron-builder needs for .dmg files; the lockfile is made on Linux.
+      - run: npm install --no-save dmg-license
       - run: npm run dist:mac
         env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
       - uses: actions/upload-artifact@v4
@@ -99,19 +101,29 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - run: npm run build:web
-      # The same files, zipped, are the live update for the Android app (see web/update.js).
-      - run: cd dist-web && zip -qr ../StudyHall-web.zip .
-      - uses: actions/upload-artifact@v4
-        with: { name: webzip, path: StudyHall-web.zip, if-no-files-found: error }
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist-web }
       - id: deploy
         uses: actions/deploy-pages@v4
 
+  webzip:
+    name: Android live update bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build:web
+      # The web app, zipped, is the live update for the Android app (see web/update.js).
+      - run: cd dist-web && zip -qr ../StudyHall-web.zip .
+      - uses: actions/upload-artifact@v4
+        with: { name: webzip, path: StudyHall-web.zip, if-no-files-found: error }
+
   release:
     name: Publish release
-    needs: [windows, mac, android, web]
+    needs: [windows, mac, android, webzip]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
