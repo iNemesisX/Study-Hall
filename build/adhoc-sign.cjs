@@ -7,6 +7,11 @@ const path = require('path');
 
 exports.default = async function adhocSign(context) {
   if (context.electronPlatformName !== 'darwin') return;
+  // A universal app is built from an Intel and an Apple-silicon copy that must still be
+  // identical apart from their code, so only the merged app (arch 4 = universal) is signed.
+  const targets = context.packager.platformSpecificBuildOptions?.target || [];
+  const universal = JSON.stringify(targets).includes('universal');
+  if (universal && context.arch !== 4) return;
   const app = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   execFileSync('codesign', ['--force', '--deep', '--sign', '-', app], { stdio: 'inherit' });
 };
