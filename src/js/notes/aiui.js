@@ -60,7 +60,7 @@ export async function aiSettingsDialog(note) {
     title: 'AI setup', wide: true,
     body: `
       ${note ? `<p class="callout-note">${esc(note)}</p>` : ''}
-      <p class="muted small">The AI reads your photos and writes the notes, flashcards and study guides. Pick one option. You can switch any time. <a href="#" data-faq-link>Step-by-step help in the FAQ</a></p>
+      <p class="muted small">The AI reads your photos and writes the notes, flashcards and study guides. Everything it writes is marked with the model that wrote it. AI-generated content can be wrong, so check it against your class materials. Pick one option. You can switch any time. <a href="#" data-faq-link>Step-by-step help in the FAQ</a></p>
       <div class="ai-choices">
         ${Object.entries(PROVIDERS).map(([id, p]) => `<button class="ai-choice ${id === provider ? 'on' : ''}" data-pick="${id}" type="button">
           <b>${esc(p.name)}</b><span class="pill">${esc(p.tag)}</span></button>`).join('')}

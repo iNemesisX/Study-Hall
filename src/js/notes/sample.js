@@ -62,11 +62,12 @@ export async function ensureWelcome() {
     await nbstore.addPage(nb, start, { title: 'Start here: what Study Hall can do', topics: topics(howTo) });
     const sampleTopics = topics(SAMPLE_NOTES);
     sampleTopics[1].pics = [{ id: uid(), kind: 'diagram', name: 'The three stages', diagram: SAMPLE_DIAGRAM, x: 56, y: null, w: 600, r: SAMPLE_DIAGRAM.height / SAMPLE_DIAGRAM.width, ink: [] }];
-    await nbstore.addPage(nb, start, { title: 'Sample notes: Cellular respiration', topics: sampleTopics });
+    SAMPLE_DIAGRAM.by = { provider: 'sample' };
+    await nbstore.addPage(nb, start, { title: 'Sample notes: Cellular respiration', topics: sampleTopics, aiBy: [{ provider: 'sample' }] });
     const plain = t => t.replace(/\[([^\]]+)\]\((https:[^)\s]+)\)/g, '$1'); // the note renderer has no links
     const ai = FAQ[0].items.filter(it => ['free', 'gemini', 'ollama', 'claude'].includes(it.id));
     await nbstore.addPage(nb, start, { title: 'Set up the AI (free)', topics: topics(ai.map(it => ({ heading: it.q, summary: '', blocks: it.a.map(b => (typeof b === 'string' ? { type: 'paragraph', text: plain(b) } : b.steps ? { type: 'numbered', items: b.steps.map(plain) } : { type: 'callout', text: plain(b.tip) })) }))) });
-    await nbstore.addPage(nb, guides, { title: 'Sample study guide: Cellular respiration', kind: 'guide', topics: topics(SAMPLE_GUIDE) });
+    await nbstore.addPage(nb, guides, { title: 'Sample study guide: Cellular respiration', kind: 'guide', topics: topics(SAMPLE_GUIDE), aiBy: [{ provider: 'sample' }] });
     start.pages[0].key = 'start'; start.pages[1].key = 'sample'; guides.pages[0].key = 'guide';
     await nbstore.saveNotebook(nb);
   }

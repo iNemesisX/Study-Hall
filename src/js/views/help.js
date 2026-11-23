@@ -164,7 +164,7 @@ function steps(nb) {
     { part: 0, target: q('[data-tour="pages"]'), before: () => open(start), title: 'Pages hold your notes',
       body: 'Each page is one lecture or topic.<br><br>👉 <b>Click "Sample notes: Cellular respiration"</b> to open it.', done: () => !!sample && at(sample) },
     { part: 0, target: q('[data-tour="paper"]'), before: () => open(sample), place: 'corner', title: 'This is what Study Hall writes',
-      body: 'This sample shows the kind of notes you get from pictures of lecture slides: the AI works out the topics and writes headings, definitions, formulas, tables and worked examples. Everything on the page can be edited.' },
+      body: 'This sample shows the kind of notes you get from pictures of lecture slides: the AI works out the topics and writes headings, definitions, formulas, tables and worked examples. Everything on the page can be edited.<br><br>Pages written by the AI show a notice saying <b>which AI model wrote them</b>. AI-generated content can be wrong, so check notes against your slides or textbook.' },
     { part: 0, target: q('.pg-pic'), place: 'corner', title: 'Pictures and diagrams',
       before: () => { open(sample); setTimeout(() => document.querySelector('.pg-pic')?.scrollIntoView({ block: 'center' }), 350); },
       body: 'Pictures sit in your notes as objects you can <b>move, resize and draw on</b>. When your photos contain diagrams, Study Hall offers each one in the <b>Clippings</b> tray: as a cut-out of the photo, and as a <b>clean diagram redrawn by the AI</b> like this one, with labels you can edit (double-click) and move.' },

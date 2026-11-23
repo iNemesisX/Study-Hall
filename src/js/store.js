@@ -78,6 +78,7 @@ function sanitizeSet(s, folderIds) {
     description: text(s.description, 5000),
     folderId: folderIds.has(s.folderId) ? s.folderId : null,
     notebookId: typeof s.notebookId === 'string' && ID.test(s.notebookId) ? s.notebookId : null, // the class notebook this set was made from
+    ai: Array.isArray(s.ai) ? s.ai.filter(b => isObj(b) && typeof b.provider === 'string').slice(0, 4).map(b => ({ provider: text(b.provider, 20), model: text(b.model || '', 100) })) : [], // models that generated cards in this set
     created: num(s.created),
     updated: num(s.updated),
     cards, progress, sessions,

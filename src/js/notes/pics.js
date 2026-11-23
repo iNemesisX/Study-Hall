@@ -16,6 +16,7 @@ import { $, $$, h, uid, plural, toast, busy } from '../ui.js';
 import { Ink } from './ink.js';
 import { toolSpec } from './inkbar.js';
 import { htmlToText } from './render.js';
+import { byText, WARNING } from './aicredit.js';
 import { fail, ensureAi, getSettings, getUsage, checkBudget } from './aiui.js';
 
 const api = nbstore.api;
@@ -272,7 +273,10 @@ export function createPics(c) {
       h('button', { text: '🗑', title: 'Delete this picture (Delete key)', onclick: () => removePic(pic.id) }));
     for (const b of $$('button', bar)) b.addEventListener('pointerdown', (e) => e.stopPropagation());
     const handle = h('div', { class: 'pic-handle', title: 'Drag to resize' });
-    el.append(...body, svg, bar, handle);
+    const credit = pic.kind === 'diagram' && pic.diagram.by?.provider !== 'sample'
+      ? h('div', { class: 'dg-credit', text: '✨ AI-drawn · check it', title: `Drawn with ${byText(pic.diagram.by ? [pic.diagram.by] : [])}. ${WARNING} Diagrams are simplified redraws, so compare labels and arrows with the original.` })
+      : null;
+    el.append(...[...body, svg, credit, bar, handle].filter(Boolean));
     picInks.set(pic.id, new Ink(svg, pic.ink, { getTool: toolSpec(c.mode), onCommit: (op) => c.history.push(op), scroller: c.scroller() }));
 
     // Typing mode: drag to move, corner to resize. Drawing mode: the ink layer takes the pointer instead.
@@ -413,7 +417,8 @@ export function createPics(c) {
       if (!quiet) busy(`Drawing a clean version of "${clip.label}"…`);
       const cut = await crop(clip.src, clip.box, 1400);
       const topic = topics().find((t) => t.heading && clip.section && t.heading.trim().toLowerCase() === clip.section.trim().toLowerCase());
-      const diagram = await api.drawDiagram({ bytes: cut.bytes, label: clip.label, context: topic ? htmlToText(topic.html).slice(0, 3000) : '' });
+      const { by, ...diagram } = await api.drawDiagram({ bytes: cut.bytes, label: clip.label, context: topic ? htmlToText(topic.html).slice(0, 3000) : '' });
+      diagram.by = by;
       const made = { id: uid(), kind: 'diagram', diagram, label: diagram.title || clip.label, section: clip.section, from: clip.id };
       const at = clips().indexOf(clip);
       clips().splice(at + 1, 0, made);
@@ -472,7 +477,7 @@ export function createPics(c) {
       h('div', { class: 'clip-list' }, list.map((clip) => {
         const card = h('div', { class: `clip ${clip.used ? 'used' : ''} ${clip.kind === 'diagram' ? 'drawn' : ''}`, draggable: true, 'data-clip': clip.id, title: 'Drag into your notes' },
           thumb(clip),
-          h('div', { class: 'clip-name' }, h('span', { class: 'pill', text: clip.kind === 'diagram' ? '✨ Clean diagram' : 'From photo' }), h('span', { text: clip.label })),
+          h('div', { class: 'clip-name' }, h('span', { class: 'pill', text: clip.kind === 'diagram' ? '✨ Clean diagram · AI' : 'From photo', title: clip.kind === 'diagram' ? `Drawn with ${byText(clip.diagram.by ? [clip.diagram.by] : [])}. ${WARNING}` : null }), h('span', { text: clip.label })),
           h('div', { class: 'clip-actions' },
             h('button', { class: 'btn small primary', text: clip.used ? 'Place again' : 'Place', title: clip.section ? `Put it under "${clip.section}"` : 'Put it in your notes', onclick: () => placeClip(clip) }),
             clip.kind !== 'diagram' ? h('button', { class: 'btn small', text: clip.drawn ? '✨ Redraw again' : '✨ Redraw', title: 'Have the AI draw a clean, editable version of this diagram (1 AI request)', onclick: () => redraw(clip) }) : null,

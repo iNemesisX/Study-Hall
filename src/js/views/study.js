@@ -6,6 +6,7 @@ import { $, esc, uid, plural, modal, toast, busy } from '../ui.js';
 import { sectionHtml, htmlToText } from '../notes/render.js';
 import { fail, ensureAi } from '../notes/aiui.js';
 import { setCard, notFound } from './common.js';
+import { addBy } from '../notes/aicredit.js';
 
 const api = nbstore.api;
 const MAX_CHARS = 180000; // notes text sent to the model in one request
@@ -68,12 +69,12 @@ export async function makeSet(nb, scope, count, targetId) {
       cards.push({ id: uid(), term, def, starred: false });
     }
     if (!cards.length) throw new Error('No new cards came back. Try again.');
-    if (set) { set.cards.push(...cards); set.updated = Date.now(); store.save(); }
+    if (set) { set.cards.push(...cards); set.ai = addBy(set.ai, res.by); set.updated = Date.now(); store.save(); }
     else {
       const id = uid();
       const sec = scope.startsWith('s:') && nb.sections.find(s => `s:${s.id}` === scope);
       const page = scope.startsWith('p:') && nbstore.findPage(nb, scope.slice(2))?.meta;
-      store.saveSet({ id, title: `${nb.name}${sec ? ` – ${sec.name}` : page ? ` – ${page.title}` : ''}`.slice(0, 120), description: `Made from your ${nb.name} notes`, folderId: null, notebookId: nb.id, cards });
+      store.saveSet({ id, title: `${nb.name}${sec ? ` – ${sec.name}` : page ? ` – ${page.title}` : ''}`.slice(0, 120), description: `Made from your ${nb.name} notes`, folderId: null, notebookId: nb.id, ai: addBy([], res.by), cards });
       set = store.getSet(id);
     }
     busy(null);
@@ -128,7 +129,7 @@ export async function makeGuide(nb, scope, focus) {
     const topics = (res.sections || []).map(sec => ({ id: uid(), heading: String(sec.heading || '').slice(0, 200), html: sectionHtml(sec), ink: [] }));
     if (!topics.length) throw new Error('The guide came back empty. Try again.');
     const sec = nb.sections.find(s => s.guides) || await nbstore.addSection(nb, 'Study guides', { guides: true });
-    const page = await nbstore.addPage(nb, sec, { title: String(res.title || `Study guide: ${nb.name}`).slice(0, 150), kind: 'guide', topics });
+    const page = await nbstore.addPage(nb, sec, { title: String(res.title || `Study guide: ${nb.name}`).slice(0, 150), kind: 'guide', topics, aiBy: addBy([], res.by) });
     busy(null);
     toast(notes.truncated ? 'Study guide ready (your notes were very long, so the last part was left out)' : 'Study guide ready');
     location.hash = `#/nb/${nb.id}/p/${page.id}`;

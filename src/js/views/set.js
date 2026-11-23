@@ -5,6 +5,7 @@ import { face, masteryBar } from '../cards.js';
 import { mountFlashcards } from './flashcards.js';
 import { notFound } from './common.js';
 import * as nbstore from '../notes/nbstore.js';
+import { creditHtml } from '../notes/aicredit.js';
 
 const MODES = [['flashcards', '🃏', 'Flashcards'], ['learn', '🎯', 'Learn'], ['write', '✏️', 'Write'], ['test', '📝', 'Test']];
 const GROUPS = [
@@ -26,6 +27,7 @@ export function setView(root, id) {
       ${folder ? `<a class="crumb" href="#/folder/${folder.id}">📁 ${esc(folder.name)}</a>` : ''}
       <h1>${esc(set.title)}</h1>
       ${set.description ? `<p class="muted">${esc(set.description)}</p>` : ''}
+      ${set.ai?.length ? creditHtml(set.ai, 'Cards in this set were generated', 'set-credit') : ''}
       <div class="row gap wrap" style="margin-top:12px">
         <a class="btn" href="#/set/${id}/edit">✎ Edit</a>
         <button class="btn" data-act="move">📁 Move</button>

@@ -3,6 +3,7 @@
 import { esc, shuffle } from './ui.js';
 import { norm } from './grading.js';
 import * as store from './store.js';
+import { creditHtml } from './notes/aicredit.js';
 
 export const LABEL = { term: 'Term', def: 'Definition' };
 export const text = (card, side) => (side === 'term' ? card.term : card.def) || '';
@@ -49,7 +50,7 @@ export function modeHeader(set, title, right = '') {
     <a class="back" href="#/set/${set.id}">← ${esc(set.title)}</a>
     <h2>${title}</h2>
     <div class="mode-head-right">${right}</div>
-  </div>`;
+  </div>${set.ai?.length ? creditHtml(set.ai, 'Cards in this set were generated', 'mode-credit') : ''}`;
 }
 
 /** Green/yellow/grey bar of mastered / still learning / not studied. */

@@ -51,8 +51,8 @@ export async function removeSection(nb, sec) {
 }
 
 /** Creates a page in a section. kind: 'notes' (default) or 'guide'. */
-export async function addPage(nb, sec, { title = 'Untitled page', kind = 'notes', topics = [], images = [] } = {}) {
-  const page = { id: uid(), title, kind, created: Date.now(), updated: Date.now(), images, topics };
+export async function addPage(nb, sec, { title = 'Untitled page', kind = 'notes', topics = [], images = [], aiBy } = {}) {
+  const page = { id: uid(), title, kind, created: Date.now(), updated: Date.now(), images, topics, ...(aiBy ? { aiBy } : {}) };
   await api.savePage(nb.id, page);
   sec.pages.push({ id: page.id, title, kind });
   await saveMeta(nb);

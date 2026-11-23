@@ -8,6 +8,7 @@ import { Ink, InkHistory } from '../notes/ink.js';
 import { prefs, toolSpec, inkBar } from '../notes/inkbar.js';
 import { fail, errText, ensureAi, getSettings, checkBudget } from '../notes/aiui.js';
 import { createPics } from '../notes/pics.js';
+import { creditHtml, addBy } from '../notes/aicredit.js';
 import { notFound } from './common.js';
 
 const api = nbstore.api;
@@ -171,6 +172,7 @@ export function pageView(root, nbId, pageId) {
         onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); ($('.pg-text', paper) || e.target).focus(); } },
       }),
       h('div', { class: 'pg-date', text: `${new Date(page.created || Date.now()).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}${page.kind === 'guide' ? '  ·  Study guide' : ''}` }),
+      aiNotice(),
       page.images.length ? photoTray(fresh) : null,
       page.topics.map(topicNode),
       page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere());
@@ -197,6 +199,14 @@ export function pageView(root, nbId, pageId) {
     }, true);
     scroller.scrollTop = keep;
     ribbon.refresh();
+  }
+
+  // Which AI wrote this page, and that it can be wrong. Pages from before 2.4 that hold AI notes get a generic notice.
+  function aiNotice() {
+    let by = page.aiBy;
+    if (!by?.length && page.topics.length && (page.kind === 'guide' || page.images.some(i => i.processed))) by = [{ provider: 'unknown' }];
+    if (!by?.length) return null;
+    return h('div', { html: creditHtml(by, page.kind === 'guide' ? 'This study guide was written' : 'Notes on this page were written', 'pg-credit') }).firstElementChild;
   }
 
   // Shown on a page with no notes yet: the main things a new user can do.
@@ -390,7 +400,7 @@ export function pageView(root, nbId, pageId) {
     if (!imgs.length) return toast('Add some photos first (Insert tab)');
     if (all && page.topics.length &&
       !(await confirmDialog('Rewrite the notes?', 'The current notes on this page, your edits and your annotations will be replaced.', 'Rewrite'))) return;
-    if (all) { pics.dropTopicPics(page.topics); page.topics = []; page.clips = []; }
+    if (all) { pics.dropTopicPics(page.topics); page.topics = []; page.clips = []; page.aiBy = []; }
     const batchSize = (await getSettings()).provider === 'ollama' ? 2 : 6; // local models handle fewer images at once
     if (!(await checkBudget(Math.ceil(imgs.length / batchSize)))) return;
     let done = 0;
@@ -408,6 +418,7 @@ export function pageView(root, nbId, pageId) {
           else page.topics.push({ id: uid(), heading: String(sec.heading || '').slice(0, 200), html: sectionHtml(sec), ink: [] });
         }
         if (res.title && page.title === 'Untitled page') page.title = String(res.title).slice(0, 150);
+        page.aiBy = addBy(page.aiBy, res.by);
         batch.forEach(b => { b.processed = true; });
         done += batch.length;
         dirty = true; await flush();

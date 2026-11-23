@@ -83,6 +83,19 @@ export const FAQ = [
         ],
       },
       {
+        id: 'ai-wrong', q: 'Can AI-generated notes, flashcards or study guides be wrong?',
+        a: [
+          'Yes. AI models can misread a photo, mix up details or state something that sounds right but isn\'t. Everything the AI writes in Study Hall is marked with a ✨ notice naming the AI service and model that wrote it, for example "Notes on this page were written with Google Gemini (gemini-3.5-flash)".',
+          { steps: [
+            'Check notes against the original slides or textbook, especially numbers, formulas, names and dates. The photos stay on the page so you can compare.',
+            'Fix mistakes directly: click and type. Your edits are used for flashcards and study guides made afterwards.',
+            'Redrawn diagrams are simplified schematics marked "AI-drawn". Compare their labels and arrows with the original photo.',
+            'If a page has many mistakes, try **Exhaustive** detail or a more accurate AI option in AI setup, then **Insert → Rewrite all**.',
+          ] },
+          { tip: 'Treat AI notes as a first draft to study from, not as the final word. When the AI and your teacher disagree, go with your teacher.' },
+        ],
+      },
+      {
         id: 'key-safe', q: 'Where is my API key stored? Is it safe?',
         a: [
           'Your key is saved only on your computer, encrypted with your Windows account. Study Hall sends it only to the company that issued it (Google or Anthropic), and only when you generate something.',

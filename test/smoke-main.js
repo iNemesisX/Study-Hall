@@ -80,7 +80,8 @@ async function run(base) {
     check('old flashcard set linked to its notebook', await js(`const m = await import('./js/store.js'); return m.getSet('oldset1').notebookId === 'oldnb1'`));
 
     /* ---- first-run tour ---- */
-    check('tour starts on first launch', await js(`return !!document.querySelector('.tour-layer') && document.querySelector('.tour-tip h3').textContent.includes('Welcome')`));
+    check('tour starts on first launch', await js(`for (let i = 0; i < 60 && !document.querySelector('.tour-tip h3'); i++) await new Promise(r => setTimeout(r, 100));
+      return !!document.querySelector('.tour-layer') && document.querySelector('.tour-tip h3').textContent.includes('Welcome')`));
     await shot('01-tour-welcome');
     const tip = () => js(`return document.querySelector('.tour-tip h3')?.textContent || ''`);
     const nextBtn = () => js(`document.querySelector('.tour-tip .btn.primary').click();`);
@@ -99,6 +100,7 @@ async function run(base) {
     check('doing the action advances the tour', (await tip()).includes('what Study Hall writes'));
     await shot('03-tour-notes');
     await nextBtn(); await sleep(700);
+    check('sample notes are labelled as sample content', await js(`const c = document.querySelector('.pg-credit'); return !!c && c.textContent.includes('Sample content') && !document.querySelector('.pg-pic.diagram .dg-credit')`));
     check('tour shows pictures and diagrams on the sample page', (await tip()).includes('Pictures and diagrams') && await js(`return !!document.querySelector('.pg-pic.diagram') && document.querySelectorAll('.pg-pic.diagram .dg-label').length === 10`));
     await shot('03b-tour-pictures');
     await nextBtn(); await sleep(300);
@@ -252,6 +254,10 @@ async function run(base) {
     check('notes written into topics, page titled, photos marked used', await js(`return document.querySelectorAll('.pg-topic').length === 2 && ${PG}.page.title === 'Newtonian Mechanics' && ${PG}.newPhotos() === 0 && document.querySelectorAll('.pg-text .katex').length >= 3`));
     check('page title shows in the page list', await js(`return document.querySelector('.page-item.on').textContent.includes('Newtonian Mechanics')`));
 
+    /* ---- AI disclaimer ---- */
+    check('AI notes show which model wrote them and that they can be wrong', await js(`const c = document.querySelector('.pg-credit'); return !!c && c.textContent.includes('Notes on this page were written with Ollama (qwen3-vl:8b)') && c.textContent.includes('can be wrong') && ${PG}.page.aiBy[0].model === 'qwen3-vl:8b'`));
+    check('the notice is not part of the editable notes', await js(`return !document.querySelector('.pg-credit').closest('.pg-text') && !${PG}.page.topics.some(t => t.html.includes('ai-credit'))`));
+
     /* ---- clippings, pictures and AI diagrams ---- */
     check('diagram found in the photos is offered in Clippings, with a clean redraw', await js(`const c = ${PG}.page.clips; return c.length === 2 && c[0].src && c[1].kind === 'diagram' && document.querySelectorAll('.clip-dock.open .clip').length === 2 && document.querySelector('.clip.drawn svg.clip-thumb') !== null`));
     await shot('11b-clippings');
@@ -261,12 +267,14 @@ async function run(base) {
       const dt = new DataTransfer(); dt.setData('application/x-studyhall-clip', ${PG}.page.clips[1].id);
       paper.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: t.left + 400, clientY: t.top + 200 })); await new Promise(r => setTimeout(r, 700));`);
     check('dragging the clean diagram into the notes places it at the drop point', await js(`const p = ${PG}.page.topics[1].pics[0]; return p.kind === 'diagram' && Math.abs(p.x + p.w / 2 - 400) < 3 && document.querySelectorAll('.pg-pic.diagram .dg-label').length === 3`));
+    check('AI-drawn diagrams carry an "AI-drawn" badge naming the model', await js(`const b = document.querySelector('.pg-pic.diagram .dg-credit'); return !!b && b.textContent.includes('AI-drawn') && b.title.includes('qwen3-vl:8b') && b.title.includes('can be wrong') && document.querySelector('.clip.drawn .pill').textContent.includes('AI')`));
     check('AI-drawn SVG is stripped of scripts and handlers', await js(`const a = document.querySelector('.pg-pic.diagram .dg-art'); return !a.querySelector('script') && !a.innerHTML.includes('onclick') && a.querySelectorAll('rect').length === 2 && a.querySelectorAll('polygon').length === 1`));
     const drag = (sel, dx, dy) => js(`const el = document.querySelector('${sel}'); const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
       const ev = (t, X, Y) => el.dispatchEvent(new PointerEvent(t, { clientX: X, clientY: Y, pointerId: 21, bubbles: true, button: 0, pointerType: 'mouse' }));
       ev('pointerdown', x, y); ev('pointermove', x + ${dx} / 2, y + ${dy} / 2); ev('pointermove', x + ${dx}, y + ${dy}); ev('pointerup', x + ${dx}, y + ${dy}); await new Promise(r => setTimeout(r, 250));`);
     const d0 = await js(`const p = ${PG}.page.topics[1].pics[0]; return [p.x, p.y, p.w]`);
     await drag('.pg-pic.diagram', -60, 30);
+    check('pictures show no stray text', await js(`return document.querySelectorAll('.pg-pic').length === 2 && [...document.querySelectorAll('.pg-pic')].every(p => ![...p.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()))`));
     check('a picture can be dragged to a new position', await js(`const p = ${PG}.page.topics[1].pics[0]; return p.x === ${d0[0]} - 60 && p.y === ${d0[1]} + 30 && document.querySelector('.pg-pic.diagram').classList.contains('sel')`));
     await drag('.pg-pic.diagram .pic-handle', -80, 0);
     check('dragging the corner resizes it', await js(`return ${PG}.page.topics[1].pics[0].w === ${d0[2]} - 80`));
@@ -280,6 +288,7 @@ async function run(base) {
       const ev = (t, x, y) => svg.dispatchEvent(new PointerEvent(t, { clientX: b.left + x, clientY: b.top + y, pointerId: 22, bubbles: true, button: 0, pointerType: 'mouse' }));
       ev('pointerdown', 30, 30); for (let i = 1; i < 15; i++) ev('pointermove', 30 + i * 8, 30 + i * 3); ev('pointerup', 150, 75);`);
     check('drawing on a picture stores ink with that picture', await js(`return ${PG}.getMode() !== 'text' && ${PG}.page.topics[1].pics[0].ink.length === 1 && ${PG}.page.topics[1].ink.length === 0`));
+    await js(`document.querySelector('.pg-pic.diagram').scrollIntoView({ block: 'center' });`);
     await shot('11c-pictures');
     await js(`document.querySelector('[data-tab="home"]').click();
       const c = document.createElement('canvas'); c.width = 500; c.height = 300; c.getContext('2d').fillRect(0, 0, 500, 300);
@@ -358,6 +367,7 @@ async function run(base) {
     await shot('13-study-guide-dialog');
     await js(`document.querySelector('.modal [data-f="focus"]').value = 'Midterm on forces'; document.querySelector('.modal .btn.primary').click();`); await sleep(1500);
     check('study guide saved as a page under "Study guides"', await js(`return ${PG}.page.kind === 'guide' && document.querySelector('.sec-item.on').textContent.includes('Study guides') && document.querySelectorAll('.pg-text details.qa').length === 2`));
+    check('study guide shows the AI notice', await js(`const c = document.querySelector('.pg-credit'); return !!c && c.textContent.includes('This study guide was written with') && c.textContent.includes('can be wrong')`));
     await js(`document.querySelector('details.qa summary').click();`);
     await shot('14-study-guide');
     await js(`document.querySelector('[data-tab="study"]').click();`); await clickText('.rb.big', 'Flashcards'); await sleep(300);
@@ -377,6 +387,10 @@ async function run(base) {
     await js(`document.querySelector('[data-tab="study"]').click();`); await clickText('.rb.big', 'Flashcards'); await sleep(200); await clickText('.menu-item', 'Generate from your notes'); await sleep(300);
     await js(`document.querySelector('.modal [data-f="scope"]').value = 'all'; document.querySelector('.modal .btn.primary').click();`); await sleep(1500);
     check('flashcards made from the class notes and opened', await js(`const m = await import('./js/store.js'); const s = m.setsForNotebook('${nbId}'); return s.length === 2 && s[1].cards.length === 5 && location.hash === '#/set/' + s[1].id && document.querySelectorAll('.term-row').length === 5`));
+    check('generated flashcard set shows the AI notice; typed set does not', await js(`const m = await import('./js/store.js'); const c = document.querySelector('.set-credit'); return !!c && c.textContent.includes('Cards in this set were generated with') && m.setsForNotebook('${nbId}')[0].ai.length === 0`));
+    await js(`location.hash = location.hash + '/flashcards';`); await sleep(500);
+    check('study modes repeat the notice for AI sets', await js(`return !!document.querySelector('.mode-credit') && document.querySelector('.mode-credit').textContent.includes('can be wrong')`));
+    await js(`history.back();`); await sleep(500);
     await shot('15-flashcards');
     await js(`location.hash = '#/nb/${nbId}/study';`); await sleep(500);
     check('Study tools page lists the set and the guide', await js(`return document.querySelectorAll('.set-card').length === 2 && document.querySelectorAll('.tool-card').length === 3 && [...document.querySelectorAll('.folder-card')].some(c => c.textContent.includes('Study guide'))`));

@@ -207,11 +207,12 @@ function register(guarded) {
   on('notes:image:remove', (id, file) => fsp.rm(imageFile(id, file), { force: true }));
 
   /* AI */
+  // Every result says which provider and model made it, for the "AI-generated" notice.
+  const signed = async (fn) => { const ctx = await activeCtx(); return { ...(await fn(ctx)), by: { provider: ctx.provider, model: ctx.model } }; };
   on('notes:ai:notes', async ({ id, files, notebookName, pageTitle, existingHeadings }) => {
-    const ctx = await activeCtx();
     const images = [];
     for (const f of files) images.push({ mediaType: 'image/jpeg', data: (await fsp.readFile(imageFile(id, f))).toString('base64') });
-    return ai.generateNotes(ctx, { images, notebookName, pageTitle, existingHeadings });
+    return signed((ctx) => ai.generateNotes(ctx, { images, notebookName, pageTitle, existingHeadings }));
   });
   const readImages = async (id, files) => {
     const images = [];
@@ -219,9 +220,9 @@ function register(guarded) {
     return images;
   };
   on('notes:ai:figures', async ({ id, files }) => ai.findFigures(await activeCtx(), { images: await readImages(id, files) }));
-  on('notes:ai:diagram', async ({ bytes, label, context }) => ai.drawDiagram(await activeCtx(), { image: { mediaType: 'image/jpeg', data: Buffer.from(bytes).toString('base64') }, label, context }));
-  on('notes:ai:cards', async (args) => ai.generateCards(await activeCtx(), args));
-  on('notes:ai:guide', async (args) => ai.generateGuide(await activeCtx(), args));
+  on('notes:ai:diagram', ({ bytes, label, context }) => signed((ctx) => ai.drawDiagram(ctx, { image: { mediaType: 'image/jpeg', data: Buffer.from(bytes).toString('base64') }, label, context })));
+  on('notes:ai:cards', (args) => signed((ctx) => ai.generateCards(ctx, args)));
+  on('notes:ai:guide', (args) => signed((ctx) => ai.generateGuide(ctx, args)));
 
   /* phone camera */
   on('notes:capture:start', async (id, e) => {
