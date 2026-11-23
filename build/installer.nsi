@@ -1,5 +1,5 @@
 ; Study Hall installer (NSIS). Per-user install: no administrator rights needed.
-; Build: makensis -DVERSION=2.1.0 -DAPPDIR="dist/Study Hall" -DOUTFILE="dist/Study Hall Setup 2.1.0.exe" build/installer.nsi
+; Build: npm run dist:linux  (or: makensis -DVERSION=2.2.0 -DAPPDIR="../dist/Study Hall" -DOUTFILE="../dist/StudyHall Installer.exe" installer.nsi)
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"

@@ -10,7 +10,7 @@
     "start": "electron .",
     "smoke": "electron test/smoke-main.js",
     "dist": "electron-builder --win nsis",
-    "dist:linux": "electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && mv dist/win-unpacked \"dist/Study Hall\" && node build/stamp-exe.mjs \"dist/Study Hall/Study Hall.exe\" && cd build && makensis -V2 -DVERSION=$npm_package_version -DAPPDIR=\"../dist/Study Hall\" -DOUTFILE=\"../dist/Study Hall Setup $npm_package_version.exe\" installer.nsi",
+    "dist:linux": "electron-builder --win dir --x64 -c.win.signAndEditExecutable=false && mv dist/win-unpacked \"dist/Study Hall\" && node build/stamp-exe.mjs \"dist/Study Hall/Study Hall.exe\" && cd build && makensis -V2 -DVERSION=$npm_package_version -DAPPDIR=\"../dist/Study Hall\" -DOUTFILE=\"../dist/StudyHall Installer.exe\" installer.nsi",
     "docs": "node build/make-docs.mjs"
   },
   "dependencies": {
@@ -41,7 +41,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "artifactName": "StudyHall Installer.${ext}"
     },
     "mac": {
       "target": "dmg",
@@ -51,5 +52,10 @@
       "target": "AppImage",
       "category": "Education"
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/iNemesisX/study-hall.git"
+  },
+  "homepage": "https://github.com/iNemesisX/study-hall"
 }

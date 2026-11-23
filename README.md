@@ -1,5 +1,7 @@
 # Study Hall
 
+**[Download the Windows installer](https://github.com/iNemesisX/study-hall/releases/latest)** (StudyHall Installer.exe). Windows may show "Windows protected your PC" because the app isn't code-signed: click **More info → Run anyway**.
+
 Class notebooks that turn photos of slides, textbook pages and handwritten work into organized notes,
 then into flashcards, practice tests and study guides. (Formerly StudyDeck.)
 
@@ -20,7 +22,7 @@ On a Windows PC:
 npm run dist
 ```
 
-This writes `dist/Study Hall Setup 2.2.0.exe` with the icon in `build/icon.ico`. On Linux or macOS, `npm run dist:linux` builds the same kind of installer with `makensis` (install the `nsis` package first); that is how the shipped installer was made. The installer is not
+This writes `dist/StudyHall Installer.exe` with the icon in `build/icon.ico`. On Linux or macOS, `npm run dist:linux` builds the same kind of installer with `makensis` (install the `nsis` package first); that is how the shipped installer was made. The installer is not
 code-signed, so Windows SmartScreen warns on first run ("More info" → "Run anyway").
 
 ## How it is laid out
