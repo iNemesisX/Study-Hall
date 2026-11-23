@@ -56,17 +56,23 @@ This is free, private and works without internet, but it needs a strong PC: idea
 
 Any Ollama model that can read images works. Click **Find models** in AI setup to pick from the ones you have downloaded.
 
+The local model does almost everything: notes from photos and documents, **Ask AI** (including pictures and boxed areas), flashcards, tests and study guides, with no daily limit and nothing leaving your computer. Answers are slower than Gemini or Claude on most PCs.
+
+> **Recordings and dictation still need a free Gemini key**, because local models can't listen to audio. Once a recording is written out, the notes from it are made by your local model. PDFs are read as page images (first 20 pages).
+
+**On an Android tablet**, run Ollama on a computer on the same Wi-Fi and enter that computer's address in AI setup (for example **http://192.168.1.10:11434**). On the PC, set the environment variable **OLLAMA_HOST=0.0.0.0** and restart Ollama so other devices can reach it. The iPad and browser versions can't use Ollama.
+
 ### Which AI option should I choose?
 
 Start with **Google Gemini**: it is free and good enough for most slides and printed pages.
 
-Switch to **Claude** if your notes are mostly messy handwriting or dense diagrams and Gemini keeps missing things. Use **Ollama** if you want nothing to leave your computer and your PC is powerful enough.
+Switch to **Claude** if your notes are mostly messy handwriting or dense diagrams and Gemini keeps missing things. Use **Ollama** (a local model on your own computer) if you want nothing to leave your computer and no daily limit, and your PC is powerful enough. It runs Ask AI too, but recordings and dictation still use Gemini.
 
 You can switch at any time in AI setup. Notes you already made are kept.
 
 ### Can AI-generated notes, flashcards or study guides be wrong?
 
-Yes. AI models can misread a photo, mix up details or state something that sounds right but isn't. Everything the AI writes in Study Hall is marked with a ✨ notice naming the AI service and model that wrote it, for example "Notes on this page were written with Google Gemini (gemini-3.5-flash)".
+Yes. AI models can misread a photo, mix up details or state something that sounds right but isn't. Everything the AI writes in Study Hall is marked in the app with a ✨ notice naming the AI service and model that wrote it, for example "Notes on this page were written with Google Gemini (gemini-3.5-flash)". The notice is left out of PDF exports.
 
 1. Check notes against the original slides or textbook, especially numbers, formulas, names and dates. The photos stay on the page so you can compare.
 2. Fix mistakes directly: click and type. Your edits are used for flashcards and study guides made afterwards.
@@ -151,6 +157,55 @@ On the **Home** tab, use the font and size boxes. With text selected they change
 
 Touch the page with your stylus and Study Hall switches to drawing automatically. Choose pen type, colour and thickness on the **Draw** tab. Flip the stylus over (or hold its button) to erase. While a stylus is in use, fingers scroll instead of drawing.
 
+### Can I make notes from a PDF, Word or PowerPoint file?
+
+Yes. Open a page, go to **Insert → Document** (or drag the file onto the page), then press **Turn into notes**. PDF, Word (.docx), PowerPoint (.pptx), text, Markdown and CSV files work.
+
+PowerPoint speaker notes and pictures are read too. With Gemini or Claude, PDFs are read as they are, including their pictures. With Ollama, the first 20 pages of a PDF are read as images.
+
+> Each document uses one AI request. Very long documents (hundreds of pages) work best split into chapters.
+
+### How do I record a lecture or a voice note?
+
+1. Open a page and go to **Insert → Record**.
+2. Allow the microphone the first time. Keep the device near the speaker; the meter shows it can hear.
+3. Press **Stop and save**. The recording appears on the page with a player.
+4. Press **Turn into notes**. The recording is written out (you can read the **Transcript**), then turned into organized notes.
+
+Already have a recording? Use **Insert → Audio file** (MP3, M4A, WAV, AAC, OGG, WebM or FLAC).
+
+> Writing out speech uses Google Gemini, even if you picked another AI, so add a free Gemini key in AI setup. Each 8 minutes of audio is one request, so a 1-hour lecture uses about 8.
+
+### Can I dictate notes instead of typing?
+
+Yes. Click where the words should go, then **Home → Dictate**. Speak, and press **Stop dictating** when you're done.
+
+On iPad and in a browser, words appear as you speak. In the Windows, Mac and Android apps, what you said is written out by Gemini when you stop (one request per 8 minutes).
+
+### How do I ask the AI to explain part of my notes?
+
+Highlight any text in your notes. A purple **✨ Ask** button appears beside it. Click it to open the chat on the right.
+
+1. Pick a quick question (**Explain in more detail**, **How do I derive this?**, **Give me an example**, **Quiz me on this**…) or type your own.
+2. Keep asking follow-up questions in the same chat.
+3. Press **Insert into notes** to keep an answer. It's added under the highlighted part and marked as an AI answer.
+
+To ask about a diagram, drawing or handwriting, click the picture and press **✨ Ask**, or use **Home → Ask about an area** and drag a box around it. **Ctrl+J** (⌘J on Mac) asks about the highlighted text.
+
+Every answer is **checked against Wikipedia** and says whether it agrees, differs (and how), or isn't covered, with links to the articles. To check something yourself, press **🔎 Look it up** for Google, Wikipedia, YouTube or Khan Academy.
+
+> Each question uses one AI request (Wikipedia checks are free). Answers can still be wrong: they say when they go beyond your notes.
+
+### Can the AI search the web to check its answers?
+
+Yes, if your AI key allows it. Open **AI setup** and turn on **Check Ask AI answers with a web search**. Ask AI answers then come from a web search with the sources listed, instead of Wikipedia.
+
+1. **Claude:** works with any key. Anthropic charges a small fee per search on top of the normal cost.
+2. **Google Gemini:** needs a paid (billing-enabled) key. Free keys can't search, so Study Hall checks with Wikipedia instead and tells you.
+3. **Ollama (local model):** can't search the web; answers are checked with Wikipedia.
+
+Each web-checked question uses one extra AI request. Notes made from your photos, documents and recordings are never mixed with web results: they come only from your class material.
+
 ## Flashcards and studying
 
 ### How do I import a set from Quizlet?
@@ -177,18 +232,83 @@ Tests are built from a class's flashcards. Make a set first (**Study → Flashca
 
 Add your notes for the class first. Then go to **Study → Study guide**, choose what to cover (the whole class, a section or one page), and optionally describe the exam. The guide is saved as a page under **Study guides**, where you can edit and draw on it like any other page.
 
+## Sharing and exporting
+
+### How do I share a notebook with classmates?
+
+1. Open the notebook and press **Home → Share** (or click the notebook name → Share).
+2. Sign in with your email. You get a 6-digit code by email; there's no password, and the account is free.
+3. Type a classmate's email, choose **Can edit** or **Can view**, and press **Invite**. Copy the message Study Hall gives you and send it to them.
+4. They sign in to Study Hall with that email and open **👤 → Shared with me → Add**.
+
+Changes sync automatically while you're online and appear live on pages others have open. If two people change the same page at the same moment, the later save wins.
+
+> Only people you invite can open a shared notebook. Notebooks you don't share never leave your device.
+
+### Can someone see my notes without installing the app?
+
+Yes. In the Share window, tick **Anyone with the link can view** and press **Copy link**. The link opens a read-only web page; no account is needed. Untick it any time and the link stops working.
+
+### Why can't I edit a notebook someone shared with me?
+
+They shared it as **Can view**. You can read it, study it, make flashcards from it, ask the AI about it and export it, but not change it. Ask the owner to switch you to **Can edit**.
+
+### How do I stop sharing, or leave a shared notebook?
+
+Open **Share** and press **Stop sharing** (if it's yours) or **Leave notebook**. Stopping deletes the online copy and turns off the link; your own copy stays on your device. To remove one person, press ✕ next to their name.
+
+### How do I get my notes into Word, Google Docs, PowerPoint, Notion, Evernote or Obsidian?
+
+Press **Home → Export** (or click ⋯ next to a page, or the notebook name → Export). Choose **This page** or the **Whole notebook**, then the app:
+
+1. **Word**: saves a .docx file.
+2. **Google Docs**: saves a .docx. Upload it to Google Drive, right-click it, then **Open with → Google Docs**.
+3. **PowerPoint**: a .pptx with a slide per heading, pictures on their own slides, and Q&A answers in the speaker notes.
+4. **Google Slides**: saves a .pptx. Upload it to Google Drive, then **Open with → Google Slides**.
+5. **Notion**: saves a Word file. In Notion, click **Import → Word**; Notion keeps headings, lists and pictures this way.
+6. **Evernote**: saves an .enex file. In the Evernote desktop app, **File → Import → Evernote export file**. Each page becomes a note.
+7. **Obsidian**: on a computer, pick your vault folder and the notes are written into a **Study Hall** folder there, with pictures in **attachments**. On a tablet you get a .zip to unzip into the vault.
+
+> Exports include text, highlights, formulas, tables, Q&A, pictures and diagrams. Pen ink is only kept in the PDF (Home → Save as PDF / Print).
+
 ## Installing and your data
 
 ### Windows says "Windows protected your PC" when I install.
 
 This appears for apps that aren't signed with a paid certificate. Click **More info**, then **Run anyway**. You only see it once.
 
-### Where is my work saved, and how do I back it up?
+### Where is my work saved?
 
-Everything is saved automatically on your computer, in **%APPDATA%\Study Hall**. Nothing is uploaded except the photos and notes you send to the AI when generating.
+On your device. On Windows that's **%APPDATA%\Study Hall**; on a Mac, **~/Library/Application Support/Study Hall**; on iPad and Android, inside the app. Nothing is uploaded except what you send to the AI, and notebooks you choose to share.
 
-1. **Flashcard sets:** Help → Backup → Export backup creates a single file you can restore later.
-2. **Notebooks** (pages, photos and ink) are in the **notebooks** folder inside %APPDATA%\Study Hall. Copy that folder to back them up or move them to another PC.
+### How do I back up to iCloud Drive?
+
+**On a Mac or Windows PC:** go to **Help → Backup** and press **Back up to iCloud Drive** (on Windows, install **iCloud for Windows** first). Study Hall then saves a backup of everything there once a day and keeps the last 7. Any folder works, including OneDrive, Google Drive or Dropbox.
+
+**On iPad or Android:** apps can't write into iCloud Drive in the background, so press **Help → Backup → Back up now** and choose **Save to Files → iCloud Drive** (or Google Drive). Study Hall reminds you weekly.
+
+**To restore** (or move to another device): **Help → Backup → Import a file**, and pick a backup. Nothing already on the device is overwritten.
+
+### How do I install Study Hall on a Mac, iPad or Samsung/Android tablet?
+
+All versions are free and listed on the [download page](https://github.com/iNemesisX/Study-Hall/releases/latest).
+
+1. **Mac:** download **StudyHall-macOS.dmg**, open it and drag Study Hall to Applications. If the Mac says it can't check the app (it isn't signed with a paid Apple certificate), open **System Settings → Privacy & Security**, scroll down and click **Open Anyway**.
+2. **iPad:** open the web version link from the download page in **Safari**, tap **Share → Add to Home Screen**. It then works like an app, offline too, and Apple Pencil works for drawing.
+3. **Samsung / Android tablet:** download **StudyHall-Android.apk** on the tablet and open it. Allow installing from this source when asked. The S Pen draws with pressure; hold its side button to erase.
+
+To move your work across, see **How do I back up to iCloud Drive?** (Export everything, then Import a file on the new device).
+
+### How do I update Study Hall?
+
+Updates arrive by themselves; you don't need to download anything new. When one is ready, a card at the bottom right says so. **Help → Check for updates** looks straight away.
+
+1. **Windows:** the update downloads in the background. Press **Restart now** (or just close Study Hall later) and it installs and reopens.
+2. **iPad and browser:** the new version loads in the background; press **Reload**.
+3. **Android:** most updates download and apply on restart. Rarely, an update needs the new app file; the card then links to it.
+4. **Mac:** the card links to the new version. Open it and drag Study Hall into Applications to replace the old one.
+
+Your notebooks, flashcards and settings are always kept.
 
 ### If I uninstall or update, do I lose my notes?
 

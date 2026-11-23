@@ -270,6 +270,7 @@ export function createPics(c) {
     const bar = h('div', { class: 'pic-bar' },
       pic.kind === 'diagram' ? h('button', { text: '＋ Label', title: 'Add a label', onclick: () => el._addLabel() }) : null,
       h('button', { text: '✒ Draw on it', title: 'Switch to the Draw tab and write on this picture', onclick: () => c.drawMode() }),
+      c.ask ? h('button', { class: 'pic-ask', text: '✨ Ask', title: 'Ask the AI about this picture', onclick: () => c.ask(el) }) : null,
       h('button', { text: '🗑', title: 'Delete this picture (Delete key)', onclick: () => removePic(pic.id) }));
     for (const b of $$('button', bar)) b.addEventListener('pointerdown', (e) => e.stopPropagation());
     const handle = h('div', { class: 'pic-handle', title: 'Drag to resize' });

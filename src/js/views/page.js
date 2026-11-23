@@ -9,6 +9,10 @@ import { prefs, toolSpec, inkBar } from '../notes/inkbar.js';
 import { fail, errText, ensureAi, getSettings, checkBudget } from '../notes/aiui.js';
 import { createPics } from '../notes/pics.js';
 import { creditHtml, addBy } from '../notes/aicredit.js';
+import { platform, fontStack, GENERIC_FONTS } from '../platform.js';
+import { kindOf, extOf, docIcon, ACCEPT_DOCS, ACCEPT_AUDIO, prepareDoc, canRecord, startRecording, audioToChunks, formatTime, liveDictation, startLiveDictation } from '../notes/sources.js';
+import { createAsk } from '../notes/ask.js';
+import * as sync from '../cloud/sync.js';
 import { notFound } from './common.js';
 
 const api = nbstore.api;
@@ -23,23 +27,33 @@ export function pageView(root, nbId, pageId) {
   try { localStorage.setItem('studyhall-last', JSON.stringify({ nb: nbId, page: pageId })); } catch { /* ignore */ }
 
   let page = null, mode = 'text', disposed = false, dirty = false, timer = null;
+  const readonly = !sync.canEdit(nb); // a notebook someone shared with "Can view"
+  let lastInput = 0, remotePending = null;
   let pop = null, captureUi = null, scroller = null, paper = null;
   const urls = new Map();   // image file -> Promise<blob URL>
   const inks = new Map();   // topic id -> Ink
   const history = new InkHistory(() => save());
   const picker = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: e => { addFiles(e.target.files); e.target.value = ''; } });
+  const docPicker = h('input', { type: 'file', accept: ACCEPT_DOCS, multiple: true, hidden: true, onchange: e => { addFiles(e.target.files); e.target.value = ''; } });
+  const audioPicker = h('input', { type: 'file', accept: ACCEPT_AUDIO, multiple: true, hidden: true, onchange: e => { addFiles(e.target.files); e.target.value = ''; } });
+  // Tablets: take a photo with the device's own camera (the desktop app uses a phone via QR code instead).
+  const camera = h('input', { type: 'file', accept: 'image/*', capture: 'environment', hidden: true, 'data-camera': '', onchange: e => { addFiles(e.target.files); e.target.value = ''; } });
+  const takePhoto = () => (platform.qr ? phoneDialog() : camera.click());
 
   /* ----- saving ----- */
-  function save() { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 500); }
+  function save() { if (readonly) return; dirty = true; lastInput = Date.now(); clearTimeout(timer); timer = setTimeout(flush, 500); }
   async function flush(force) {
     clearTimeout(timer);
     if (force) dirty = true;
-    if (!page || !dirty) return;
+    if (!page || !dirty || readonly) return;
     dirty = false;
     try { await nbstore.savePage(nb, page); } catch (e) { dirty = true; toast(errText(e)); }
   }
   const onUnload = () => { if (page && dirty) nbstore.savePageSync(nb.id, page); };
   window.addEventListener('beforeunload', onUnload);
+  // Tablets suspend or close apps in the background without warning: save straight away.
+  const onHide = () => { if (document.visibilityState === 'hidden') flush(); };
+  document.addEventListener('visibilitychange', onHide);
 
   /* ----- page-wide listeners ----- */
   const onKeys = e => {
@@ -53,6 +67,8 @@ export function pageView(root, nbId, pageId) {
   document.addEventListener('mousedown', onDocDown);
   // An image dropped or pasted onto existing notes could be meant either way, so ask.
   function offerImages(files, x, y) {
+    const others = [...files].filter(f => kindOf(f) === 'doc' || kindOf(f) === 'audio');
+    if (others.length) addFiles(others);
     const imgs = [...files].filter(f => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
     if (!imgs.length || !page) return;
     if (!page.topics.length) return addFiles(imgs);
@@ -96,6 +112,7 @@ export function pageView(root, nbId, pageId) {
 
   /* ----- mode (typing vs drawing) ----- */
   function setMode(m) {
+    if (readonly && m !== 'text') return toast('This notebook is view only');
     mode = m;
     paper?.classList.toggle('inking', mode !== 'text');
     ribbon.refresh();
@@ -118,13 +135,13 @@ export function pageView(root, nbId, pageId) {
     return true;
   }
   const applyPageFont = () => {
-    paper?.style.setProperty('--pg-font', page.font ? `'${page.font}', 'Segoe UI', system-ui, sans-serif` : '');
+    paper?.style.setProperty('--pg-font', page.font ? fontStack(page.font) : '');
     paper?.style.setProperty('--pg-size', page.size ? `${page.size}px` : '');
   };
   // Selected text gets the font; with nothing selected the whole page does.
   function setFont(name) {
     if (!/^[\w ]{1,40}$/.test(name)) return;
-    if (selectedText()) exec('fontName', name);
+    if (selectedText()) exec('fontName', GENERIC_FONTS.find(([label]) => label === name)?.[1] || name);
     else { page.font = name; applyPageFont(); save(); toast(`Page font: ${name}`); }
     ribbon.refresh();
   }
@@ -145,15 +162,34 @@ export function pageView(root, nbId, pageId) {
   const pics = createPics({
     nb, page: () => page, paper: () => paper, scroller: () => scroller, root, mode: () => mode, history,
     drawMode: () => { ribbon.setTab('draw'); setMode(prefs.tool); },
-    save, flush, imageUrl, lazyImg, downscale, render: () => render(), ribbonRefresh: () => ribbon.refresh(),
+    save, flush, imageUrl, lazyImg, downscale, render: () => render(), ribbonRefresh: () => ribbon.refresh(), ask: el => ask.askAboutPicture(el),
     newTopic: () => { const t = { id: uid(), heading: '', html: '<p><br></p>', ink: [], pics: [] }; page.topics.push(t); return t; },
+  });
+
+  const ask = createAsk({ nb, page: () => page, paper: () => paper, root, mode: () => mode, save, flush, readonly: () => readonly });
+
+  // Someone else changed this page (shared notebooks): show it, unless the student is typing right now.
+  const applyRemote = () => {
+    if (!remotePending || disposed) return;
+    if (dirty || Date.now() - lastInput < 2500 || paper?.contains(document.activeElement) && Date.now() - lastInput < 8000) { setTimeout(applyRemote, 1500); return; }
+    const { next, by } = remotePending;
+    remotePending = null;
+    page = next;
+    page.images ||= []; page.topics ||= []; page.docs ||= []; page.audio ||= [];
+    render();
+    toast(`Updated by ${by || 'a collaborator'}`);
+  };
+  const offRemote = sync.onRemotePage((n, p, by) => {
+    if (disposed || n.id !== nb.id || p.id !== page?.id) return;
+    remotePending = { next: p, by };
+    applyRemote();
   });
 
   nbstore.loadPage(nbId, pageId).then(loaded => {
     if (disposed) return;
     if (!loaded) { root.className = ''; return notFound(root, 'page'); }
     page = loaded;
-    page.images ||= []; page.topics ||= [];
+    page.images ||= []; page.topics ||= []; page.docs ||= []; page.audio ||= [];
     render();
     ribbon.setPage(ctrl);
   });
@@ -164,21 +200,22 @@ export function pageView(root, nbId, pageId) {
     inks.clear();
     pics.reset();
     const keep = scroller?.scrollTop || 0;
-    const fresh = page.images.filter(i => !i.processed).length;
-    paper = h('article', { class: `pg-paper ${mode !== 'text' ? 'inking' : ''}`, 'data-tour': 'paper' },
+    const fresh = unprocessed().length;
+    paper = h('article', { class: `pg-paper ${mode !== 'text' ? 'inking' : ''} ${readonly ? 'readonly' : ''}`, 'data-tour': 'paper' },
+      readonly ? h('div', { class: 'pg-readonly', text: `👁 View only. Shared by ${nb.cloud?.owner || 'the owner'}; you can read, study and export, but not change it.` }) : null,
       h('h1', {
-        class: 'pg-title', contentEditable: 'plaintext-only', spellcheck: false, text: page.title === 'Untitled page' ? '' : page.title, 'data-ph': 'Page title',
+        class: 'pg-title', contentEditable: readonly ? 'false' : 'plaintext-only', spellcheck: false, text: page.title === 'Untitled page' ? '' : page.title, 'data-ph': 'Page title',
         oninput: e => { page.title = e.target.textContent.trim().slice(0, 150) || 'Untitled page'; save(); },
         onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); ($('.pg-text', paper) || e.target).focus(); } },
       }),
       h('div', { class: 'pg-date', text: `${new Date(page.created || Date.now()).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}${page.kind === 'guide' ? '  ·  Study guide' : ''}` }),
       aiNotice(),
-      page.images.length ? photoTray(fresh) : null,
+      hasSources() ? sourcesTray(fresh) : null,
       page.topics.map(topicNode),
-      page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere());
+      readonly ? null : page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere());
     applyPageFont();
-    scroller = h('div', { class: 'pg-scroll' }, paper);
-    root.replaceChildren(scroller, picker, picPicker, pics.dock());
+    scroller = h('div', { class: 'pg-scroll', onscroll: () => ask.hideBubble() }, paper);
+    root.replaceChildren(scroller, picker, camera, picPicker, docPicker, audioPicker, pics.dock());
     page.topics.forEach(t => pics.mount(t, $(`.pg-topic[data-id="${t.id}"]`, paper)));
     pics.layout();
     pics.bindPaper(paper);
@@ -211,31 +248,167 @@ export function pageView(root, nbId, pageId) {
 
   // Shown on a page with no notes yet: the main things a new user can do.
   function startHere() {
-    if (page.images.length) return null;
+    if (hasSources()) return null;
     return h('div', { class: 'pg-start', 'data-tour': 'start' },
       h('div', { class: 'big-ico', text: '📸' }),
-      h('h2', { text: 'Turn photos into notes' }),
-      h('p', { class: 'muted', text: 'Add pictures of slides, textbook pages, handouts or handwritten work. Study Hall reads them and writes organized notes on this page.' }),
+      h('h2', { text: 'Turn photos, documents or recordings into notes' }),
+      h('p', { class: 'muted', text: 'Add pictures of slides or handwritten work, a PDF, Word or PowerPoint file, or record the lecture. Study Hall reads them and writes organized notes on this page.' }),
       h('div', { class: 'row gap wrap', style: 'justify-content:center' },
         h('button', { class: 'btn primary', text: '🖼 Choose photos', onclick: () => picker.click() }),
-        h('button', { class: 'btn', text: '📱 Use phone camera', onclick: phoneDialog }),
+        h('button', { class: 'btn', text: platform.qr ? '📱 Use phone camera' : '📷 Take a photo', onclick: takePhoto }),
+        h('button', { class: 'btn', text: '📄 Upload a document', onclick: () => docPicker.click() }),
+        canRecord() ? h('button', { class: 'btn', text: '🎙 Record a lecture', onclick: () => recordDialog() }) : null,
+        h('button', { class: 'btn', text: '🎧 Audio file', onclick: () => audioPicker.click() }),
         h('button', { class: 'btn ghost', text: '✎ Just start typing', onclick: addTopic })),
-      h('p', { class: 'muted small', text: 'You can also drag images onto this page or paste a screenshot with Ctrl+V.' }));
+      h('p', { class: 'muted small', text: 'You can also drag files onto this page or paste a screenshot with Ctrl+V.' }));
   }
+  const hasSources = () => page.images.length + page.docs.length + page.audio.length > 0;
+  const unprocessed = () => [...page.images, ...page.docs, ...page.audio].filter(x => !x.processed);
 
-  function photoTray(fresh) {
+  // Everything the notes are made from: photos, documents and recordings.
+  function sourcesTray(fresh) {
+    const counts = [page.images.length && plural(page.images.length, 'photo'), page.docs.length && plural(page.docs.length, 'document'), page.audio.length && plural(page.audio.length, 'recording')].filter(Boolean).join(' · ');
+    const addMenu = e => menu(e.currentTarget, [
+      { label: 'Photos', icon: '🖼', onClick: () => picker.click() },
+      { label: platform.qr ? 'Phone camera' : 'Take a photo', icon: platform.qr ? '📱' : '📷', onClick: takePhoto },
+      { label: 'Document (PDF, Word, PowerPoint, text)', icon: '📄', onClick: () => docPicker.click() },
+      canRecord() ? { label: 'Record a lecture or voice note', icon: '🎙', onClick: () => recordDialog() } : null,
+      { label: 'Audio file', icon: '🎧', onClick: () => audioPicker.click() },
+    ].filter(Boolean));
     return h('div', { class: `pg-photos ${fresh ? 'fresh' : ''}`, 'data-tour': 'photos' },
       h('div', { class: 'pg-photos-head' },
-        h('b', { text: `📷 ${plural(page.images.length, 'photo')}` }),
+        h('b', { text: `📎 ${counts}` }),
         h('span', { class: 'muted small', text: fresh ? `${fresh} not in the notes yet` : 'All in the notes. Click a photo to view or mark it up.' }),
         h('span', { class: 'spacer' }),
-        fresh ? h('button', { class: 'btn primary small', text: `✨ Turn ${plural(fresh, 'photo')} into notes`, onclick: () => generate(false) }) : null,
-        h('button', { class: 'btn small', text: '＋ Add', title: 'Add more photos', onclick: () => picker.click() })),
-      h('div', { class: 'pg-thumbs' }, page.images.map((img, i) =>
+        fresh ? h('button', { class: 'btn primary small', text: '✨ Turn into notes', title: `Turn ${plural(fresh, 'new source')} into notes`, onclick: () => generate(false) }) : null,
+        h('button', { class: 'btn small', text: '＋ Add', title: 'Add photos, documents or recordings', onclick: addMenu })),
+      page.images.length ? h('div', { class: 'pg-thumbs' }, page.images.map((img, i) =>
         h('figure', { class: `pg-thumb ${img.processed ? '' : 'new'}` },
           lazyImg(img, { onclick: () => openViewer(img) }),
           h('figcaption', {}, h('span', { text: `${i + 1}${img.processed ? '' : ' · new'}${img.ink?.length ? ' ✎' : ''}` }),
-            h('button', { class: 'icon-btn', title: 'Remove photo', text: '✕', onclick: () => removeImage(img) }))))));
+            h('button', { class: 'icon-btn', title: 'Remove photo', text: '✕', onclick: () => removeImage(img) }))))) : null,
+      page.docs.length || page.audio.length ? h('div', { class: 'pg-files' },
+        page.docs.map(d => h('div', { class: `pg-file ${d.processed ? '' : 'new'}` },
+          h('span', { class: 'pg-file-ico', text: docIcon(d.ext) }),
+          h('span', { class: 'pg-file-name', text: d.name, title: d.name }),
+          h('span', { class: 'muted small', text: `${d.ext.toUpperCase()} · ${sizeText(d.size)}${d.processed ? '' : ' · new'}` }),
+          h('button', { class: 'icon-btn', title: 'Remove document', text: '✕', onclick: () => removeSource(d, 'docs') }))),
+        page.audio.map(a => h('div', { class: `pg-file audio ${a.processed ? '' : 'new'}` },
+          h('span', { class: 'pg-file-ico', text: a.recorded ? '🎙' : '🎧' }),
+          h('span', { class: 'pg-file-name', text: a.name, title: a.name }),
+          h('span', { class: 'muted small', text: `${a.seconds ? formatTime(a.seconds) : a.ext.toUpperCase()}${a.processed ? '' : ' · new'}` }),
+          audioPlayer(a),
+          a.transcript ? h('button', { class: 'btn small ghost', text: 'Transcript', onclick: () => showTranscript(a) }) : null,
+          h('button', { class: 'icon-btn', title: 'Remove recording', text: '✕', onclick: () => removeSource(a, 'audio') })))) : null);
+  }
+  const sizeText = n => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1e3))} KB`);
+  const AUDIO_MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac' };
+  function audioPlayer(a) {
+    const el = h('audio', { controls: true, preload: 'none', class: 'pg-audio' });
+    imageUrlTyped(a.file, AUDIO_MIME[a.ext] || 'audio/webm').then(u => { el.src = u; }).catch(() => {});
+    return el;
+  }
+  function imageUrlTyped(file, type) {
+    if (!urls.has(file)) urls.set(file, api.readImage(nb.id, file).then(bytes => URL.createObjectURL(new Blob([bytes], { type }))));
+    return urls.get(file);
+  }
+  function showTranscript(a) {
+    modal({ title: `Transcript: ${a.name}`, wide: true, body: `<div class="transcript">${esc(a.transcript).replace(/\n/g, '<br>')}</div><p class="muted small">Written by AI from the recording, so some words may be misheard.</p>`,
+      actions: [{ label: 'Copy', kind: 'ghost', onClick: async () => { try { await navigator.clipboard.writeText(a.transcript); toast('Copied'); } catch { toast('Copy failed'); } return false; } }, { label: 'Close', kind: 'primary' }] });
+  }
+  async function removeSource(item, list) {
+    if (!(await confirmDialog(list === 'docs' ? 'Remove document?' : 'Remove recording?', 'Notes already written from it are kept.', 'Remove'))) return;
+    page[list] = page[list].filter(x => x !== item);
+    await api.removeImage(nb.id, item.file);
+    dirty = true; await flush();
+    render();
+  }
+
+  /* ----- recording ----- */
+  // Records a lecture or voice note into this page's sources.
+  async function recordDialog() {
+    let rec;
+    try { rec = await startRecording(); } catch (e) { return toast(errText(e)); }
+    let closeIt, tick, saving = false;
+    const finish = async () => {
+      if (saving) return false;
+      saving = true;
+      clearInterval(tick);
+      const out = await rec.stop();
+      closeIt?.();
+      if (out.seconds < 1 || !out.bytes.length) return toast('Nothing was recorded');
+      busy('Saving the recording…');
+      try {
+        const name = `Recording ${new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+        const item = await api.addFile(nb.id, name, out.ext, out.bytes);
+        page.audio.push({ ...item, seconds: Math.round(out.seconds), recorded: true });
+        dirty = true; await flush();
+        busy(null);
+        render();
+        toast('Recording saved. Press "Turn into notes" to write notes from it.');
+      } catch (e) { busy(null); toast(errText(e)); }
+      return false;
+    };
+    closeIt = modal({
+      title: '🎙 Recording',
+      body: '<div class="rec"><div class="rec-dot"></div><div class="rec-time">0:00</div><div class="rec-meter"><i></i></div></div><p class="muted small">Keep the device near the speaker. Recordings stay on this device until you turn them into notes. Long lectures are fine; each 8 minutes uses one AI request to write out.</p>',
+      actions: [{ label: 'Cancel', kind: 'ghost', onClick: () => { saving = true; clearInterval(tick); rec.cancel(); } }, { label: '■ Stop and save', kind: 'primary', onClick: finish }],
+      onClose: () => { if (!saving) { clearInterval(tick); rec.cancel(); } },
+      onMount: el => {
+        tick = setInterval(() => {
+          $('.rec-time', el).textContent = formatTime(rec.seconds());
+          $('.rec-meter i', el).style.width = `${Math.min(100, Math.round(rec.level() * 160))}%`;
+        }, 120);
+      },
+    });
+  }
+
+  /* ----- dictation: speak and the words are typed where the cursor is ----- */
+  let dictating = null;
+  async function dictate() {
+    if (dictating) return dictating.stop();
+    inText(() => {});
+    let range = lastRange && paper?.contains(lastRange.commonAncestorContainer) ? lastRange.cloneRange() : null;
+    if (!range) {
+      if (!page.topics.length) await addTopic();
+      const text = $$('.pg-text', paper).pop();
+      range = document.createRange(); range.selectNodeContents(text); range.collapse(false);
+    }
+    const typeAt = words => {
+      if (!words) return;
+      const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+      const before = range.startContainer.textContent?.slice(0, range.startOffset) || '';
+      document.execCommand('insertText', false, `${before && !/\s$/.test(before) ? ' ' : ''}${words}`);
+      range = sel.getRangeAt(0).cloneRange();
+      range.startContainer.parentElement?.closest('.pg-text')?.dispatchEvent(new Event('input'));
+    };
+    if (liveDictation()) {
+      const live = startLiveDictation({ onText: typeAt, onEnd: err => { dictating = null; ribbon.refresh(); if (err && err !== 'no-speech' && err !== 'aborted') toast(err === 'not-allowed' ? 'Allow the microphone to dictate' : 'Dictation stopped'); } });
+      dictating = { stop: () => { live.stop(); dictating = null; ribbon.refresh(); } };
+      ribbon.refresh();
+      return toast('Listening… speak, and press Dictate again to stop');
+    }
+    // Elsewhere: record, then have the AI write out what was said (1 request per 8 minutes).
+    let rec;
+    try { rec = await startRecording(); } catch (e) { return toast(errText(e)); }
+    dictating = {
+      stop: async () => {
+        dictating = null; ribbon.refresh();
+        const out = await rec.stop();
+        if (out.seconds < 1) return;
+        busy('Writing out what you said…');
+        try {
+          const { chunks } = await audioToChunks(out.bytes);
+          let text = '';
+          for (let i = 0; i < chunks.length; i++) text += `${(await api.transcribe({ bytes: chunks[i], mediaType: 'audio/wav', mode: 'dictation', part: i + 1, of: chunks.length })).text} `;
+          busy(null);
+          typeAt(text.trim());
+          toast('Dictation added');
+        } catch (e) { fail(e); }
+      },
+    };
+    ribbon.refresh();
+    toast('Recording… press Dictate again when you\'re done');
   }
 
   function topicNode(t) {
@@ -245,13 +418,13 @@ export function pageView(root, nbId, pageId) {
     // Topic HTML is produced by notes/render.js (escaped) and edited in place; the
     // page CSP blocks scripts and inline handlers, so stored markup cannot run code.
     const text = h('div', {
-      class: 'pg-text', contentEditable: 'true', html: t.html,
+      class: 'pg-text', contentEditable: readonly ? 'false' : 'true', html: t.html,
       oninput: () => { t.html = text.innerHTML; save(); },
       onclick: e => { const c = e.target.closest('.pg-cmt'); if (c) openComment(c, text); },
     });
     return h('section', { class: 'pg-topic', 'data-id': t.id },
       h('h2', {
-        contentEditable: 'plaintext-only', text: t.heading, 'data-ph': 'Heading',
+        contentEditable: readonly ? 'false' : 'plaintext-only', text: t.heading, 'data-ph': 'Heading',
         oninput: e => { t.heading = e.target.textContent.trim(); save(); },
         onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); text.focus(); } },
       }),
@@ -290,17 +463,29 @@ export function pageView(root, nbId, pageId) {
     return new Uint8Array(await blob.arrayBuffer());
   }
   async function addFiles(files) {
-    const imgs = [...files].filter(f => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
-    if (!imgs.length || !page) return;
+    if (!page) return;
+    if (readonly) return toast('This notebook is view only');
+    files = [...files];
+    const imgs = files.filter(f => kindOf(f) === 'image');
+    const others = files.filter(f => kindOf(f) === 'doc' || kindOf(f) === 'audio');
+    const skipped = files.length - imgs.length - others.length;
+    if (!imgs.length && !others.length) return skipped && toast('Study Hall can read photos, PDF, Word, PowerPoint, text files and audio');
     let bad = 0;
-    busy(`Adding ${plural(imgs.length, 'photo')}…`);
+    busy(`Adding ${plural(imgs.length + others.length, 'file')}…`);
     for (const f of imgs) {
       try { page.images.push(await api.addImage(nb.id, f.name || 'Pasted image', await downscale(f))); } catch { bad++; }
     }
+    for (const f of others) {
+      try {
+        const kind = kindOf(f);
+        const item = await api.addFile(nb.id, f.name || (kind === 'audio' ? 'Recording' : 'Document'), extOf(f) || (kind === 'audio' ? 'm4a' : 'pdf'), new Uint8Array(await f.arrayBuffer()));
+        (kind === 'audio' ? page.audio : page.docs).push(item);
+      } catch (e) { bad++; if (/too large/.test(errText(e))) toast(errText(e)); }
+    }
     busy(null);
     dirty = true; await flush();
-    if (bad) toast(`${plural(bad, 'file')} could not be read (HEIC photos need converting to JPEG first)`);
-    else toast('Photos added. Press "Turn into notes" when you\'re ready.');
+    if (bad) toast(`${plural(bad, 'file')} could not be added (HEIC photos need converting to JPEG first)`);
+    else toast('Added. Press "Turn into notes" when you\'re ready.');
     render();
   }
   async function removeImage(img) {
@@ -393,43 +578,86 @@ export function pageView(root, nbId, pageId) {
     });
   }
 
-  /* ----- photos -> notes ----- */
+  /* ----- photos, documents and recordings -> notes ----- */
   async function generate(all) {
+    if (readonly) return toast('This notebook is view only');
     if (!(await ensureAi())) return;
-    const imgs = page.images.filter(i => all || !i.processed);
-    if (!imgs.length) return toast('Add some photos first (Insert tab)');
+    const pick = list => list.filter(x => all || !x.processed);
+    const imgs = pick(page.images), docs = pick(page.docs), recs = pick(page.audio);
+    const total = imgs.length + docs.length + recs.length;
+    if (!total) return toast('Add photos, a document or a recording first (Insert tab)');
     if (all && page.topics.length &&
       !(await confirmDialog('Rewrite the notes?', 'The current notes on this page, your edits and your annotations will be replaced.', 'Rewrite'))) return;
+    const settings = await getSettings();
+    const provider = settings.provider;
+    const batchSize = provider === 'ollama' ? 2 : 6; // local models handle fewer images at once
+    // Rough request count: transcription (1 per 8 minutes, unless already written out), then one per batch / document / recording.
+    const transcribeCost = recs.filter(r => !r.transcript).reduce((n, r) => n + Math.max(1, Math.ceil((r.seconds || 480) / 480)), 0);
+    if (!(await checkBudget(Math.ceil(imgs.length / batchSize) + docs.length + recs.length + transcribeCost))) return;
     if (all) { pics.dropTopicPics(page.topics); page.topics = []; page.clips = []; page.aiBy = []; }
-    const batchSize = (await getSettings()).provider === 'ollama' ? 2 : 6; // local models handle fewer images at once
-    if (!(await checkBudget(Math.ceil(imgs.length / batchSize)))) return;
     let done = 0;
     const found = []; // diagrams the AI spotted in the photos
+    const merge = async (res, batch = []) => {
+      if (disposed) return;
+      found.push(...pics.addFigures(res.figures, batch));
+      for (const sec of res.sections || []) {
+        const hit = page.topics.find(t => t.heading && t.heading.trim().toLowerCase() === String(sec.heading).trim().toLowerCase());
+        if (hit) hit.html += sectionHtml(sec, false);
+        else page.topics.push({ id: uid(), heading: String(sec.heading || '').slice(0, 200), html: sectionHtml(sec), ink: [] });
+      }
+      if (res.title && page.title === 'Untitled page') page.title = String(res.title).slice(0, 150);
+      page.aiBy = addBy(page.aiBy, res.by);
+      dirty = true; await flush();
+    };
+    const base = () => ({ id: nb.id, notebookName: nb.name, pageTitle: page.title, existingHeadings: page.topics.map(t => t.heading).filter(Boolean) });
     try {
+      // 1. Recordings: written out first (Gemini), then turned into notes.
+      for (const r of recs) {
+        if (!r.transcript) {
+          busy(`Listening to "${r.name}"…`);
+          const { chunks, seconds } = await audioToChunks(await api.readImage(nb.id, r.file));
+          r.seconds ||= Math.round(seconds);
+          let text = '';
+          for (let i = 0; i < chunks.length; i++) {
+            busy(`Writing out "${r.name}"${chunks.length > 1 ? `: part ${i + 1} of ${chunks.length}` : ''}…`);
+            text += `${(await api.transcribe({ bytes: chunks[i], mediaType: 'audio/wav', mode: 'lecture', part: i + 1, of: chunks.length })).text}\n\n`;
+            if (disposed) return busy(null);
+          }
+          r.transcript = text.trim();
+          dirty = true; await flush();
+        }
+        busy(`Writing notes from "${r.name}"…`);
+        if (r.transcript) await merge(await api.generate({ ...base(), transcripts: [{ name: r.name, text: r.transcript }] }));
+        r.processed = true; done++;
+      }
+      // 2. Documents, one at a time.
+      for (const d of docs) {
+        busy(`Reading "${d.name}" and writing notes…`);
+        const prepared = await prepareDoc(d, d.ext === 'pdf' && provider !== 'ollama' ? null : await api.readImage(nb.id, d.file), provider);
+        const args = prepared.pageImages ? { ...base(), imageBytes: prepared.pageImages } : { ...base(), docs: [prepared] };
+        await merge(await api.generate(args));
+        if (prepared.truncated) toast(`Only the first 20 pages of "${d.name}" were read with Ollama`);
+        d.processed = true; done++;
+        dirty = true; await flush();
+      }
+      // 3. Photos, a few at a time.
       for (let i = 0; i < imgs.length; i += batchSize) {
         const batch = imgs.slice(i, i + batchSize);
         busy(`Reading photos ${i + 1}–${i + batch.length} of ${imgs.length} and writing notes…`);
-        const res = await api.generate({ id: nb.id, files: batch.map(b => b.file), notebookName: nb.name, pageTitle: page.title, existingHeadings: page.topics.map(t => t.heading).filter(Boolean) });
-        if (disposed) return busy(null);
-        found.push(...pics.addFigures(res.figures, batch));
-        for (const sec of res.sections || []) {
-          const hit = page.topics.find(t => t.heading && t.heading.trim().toLowerCase() === String(sec.heading).trim().toLowerCase());
-          if (hit) hit.html += sectionHtml(sec, false);
-          else page.topics.push({ id: uid(), heading: String(sec.heading || '').slice(0, 200), html: sectionHtml(sec), ink: [] });
-        }
-        if (res.title && page.title === 'Untitled page') page.title = String(res.title).slice(0, 150);
-        page.aiBy = addBy(page.aiBy, res.by);
+        await merge(await api.generate({ ...base(), files: batch.map(b => b.file) }), batch);
         batch.forEach(b => { b.processed = true; });
         done += batch.length;
         dirty = true; await flush();
       }
+      if (disposed) return busy(null);
       const drawn = await pics.autoDraw(found);
       if (found.length) { dirty = true; await flush(); }
       busy(null);
-      toast(found.length ? `Notes ready. ${plural(found.length, 'diagram')} found${drawn ? `, ${drawn} redrawn clean` : ''}: see Clippings at the bottom right.` : 'Notes ready. Edit, highlight or draw on them, then try the Study tab.');
+      toast(found.length ? `Notes ready. ${plural(found.length, 'diagram')} found${drawn ? `, ${drawn} redrawn clean` : ''}: see Clippings at the bottom right.` : 'Notes ready. Highlight anything and press ✨ Ask to have it explained.');
     } catch (e) {
       fail(e);
-      if (done) toast(`Stopped after ${done} of ${imgs.length} photos`);
+      if (done) toast(`Stopped after ${done} of ${total} sources`);
+      dirty = true; await flush();
     }
     if (!disposed) render();
   }
@@ -478,10 +706,14 @@ export function pageView(root, nbId, pageId) {
 
   // What the ribbon (and the automated check) can ask this page to do.
   const ctrl = {
-    nb, get page() { return page; },
+    nb, readonly, get page() { return page; },
     getMode: () => mode, setMode, exec, setFont, setSize, addComment, addTopic, flush, history, exportPdf,
-    choosePhotos: () => picker.click(), phoneCamera: phoneDialog, generate, addFiles, pics, choosePicture: () => picPicker.click(),
-    newPhotos: () => (page ? page.images.filter(i => !i.processed).length : 0),
+    choosePhotos: () => picker.click(), phoneCamera: takePhoto, generate, addFiles, pics, choosePicture: () => picPicker.click(),
+    chooseDocument: () => docPicker.click(), chooseAudio: () => audioPicker.click(), record: () => recordDialog(), canRecord,
+    dictate, isDictating: () => !!dictating, ask,
+    askSelection: () => { if (mode !== 'text') setMode('text'); selectedText(); ask.askAboutSelection(); },
+    askArea: () => { if (mode !== 'text') setMode('text'); ask.startArea(); },
+    newPhotos: () => (page ? unprocessed().length : 0),
     inkCount: () => (page ? page.topics.reduce((n, t) => n + (t.ink?.length || 0), 0) : 0),
   };
   root._pg = ctrl;
@@ -494,11 +726,15 @@ export function pageView(root, nbId, pageId) {
     offCapture();
     closePop();
     window.removeEventListener('beforeunload', onUnload);
+    document.removeEventListener('visibilitychange', onHide);
     document.removeEventListener('keydown', onKeys);
     document.removeEventListener('mousedown', onDocDown);
     document.removeEventListener('paste', onPaste);
     document.removeEventListener('selectionchange', onSelection);
     pics.dispose();
+    ask.dispose();
+    offRemote();
+    dictating?.stop();
     urls.forEach(p => p.then(u => URL.revokeObjectURL(u)).catch(() => {}));
   };
 }

@@ -31,7 +31,7 @@ code-signed, so Windows SmartScreen warns on first run ("More info" → "Run any
 - **Ribbon:** Home (font, format, highlight, comment, PDF) · Insert (photos, phone camera, turn photos into notes) ·
   Draw (pens, eraser, undo) · Study (flashcards: generate from notes, type by hand, or import from Quizlet; practice test; study guide) · Help (tour, feature guide, AI setup, backup).
 - **Pictures and Clippings:** standalone images in notes that can be moved, resized and drawn on. Diagrams found in photos are offered in a Clippings tray, as cut-outs and as clean, editable diagrams redrawn by the AI.
-- **AI notices:** notes, study guides, generated flashcard sets and redrawn diagrams are marked with the AI service and model that wrote them, and a reminder that AI-generated content can be wrong.
+- **AI notices:** notes, study guides, generated flashcard sets and redrawn diagrams are marked with the AI service and model that wrote them, and a reminder that AI-generated content can be wrong. The notice is shown in the app only, not in PDF exports.
 - **Usage alerts:** the AI button shows requests used today; a warning bar appears at 75% and 90% of the daily limit and when it is used up.
 - **Guided tour:** plays every time the app opens (untick "Show this tour every time Study Hall opens", or use Help → Tour at startup, to stop it). It has three parts: Notes; Flashcards and studying; Setup and help. Users click through a sample class and can jump straight to any part.
 - **FAQ:** Help → FAQ, or the ? button. Searchable, with step-by-step instructions for getting and connecting a Gemini, Claude or Ollama API key. The same text is in [docs/FAQ.md](docs/FAQ.md).
@@ -69,6 +69,13 @@ without editing code. Defaults are in `notes/main.js` (`DEFAULTS`).
 | `src/js/notes/sample.js` | The Welcome notebook |
 | `src/js/views/set.js`, `learn.js`, `write.js`, `test.js`, `flashcards.js`, `editor.js` | The flashcard study modes from StudyDeck, unchanged |
 | `test/smoke-main.js` | End-to-end check: `npm run smoke` |
+
+## Sharing, exports, updates
+
+- **Sharing** runs on a Supabase project you own: setup in [docs/SHARING.md](docs/SHARING.md), database rules in [supabase/schema.sql](supabase/schema.sql), connection details in `src/js/cloud/config.js`. Code: `src/js/cloud/` (backend adapter, sync, screens) and `src/js/viewer.js` (view-only links).
+- **Exports** (Word, PowerPoint, Evernote, Obsidian; Google Docs/Slides and Notion via those files) are built on the device: `src/js/notes/exporters.js`, `exportui.js`.
+- **Backups** to iCloud Drive or any folder: `src/js/notes/backup.js`, with folder access limited to folders the user picked (`files.js`).
+- **Updates:** each release publishes `update.json` (versions and SHA-256 checksums). Windows downloads and silently installs the new installer (`updater.js`); Android updates its web layer live from `StudyHall-web.zip` via the Capgo updater (`web/update.js`); the iPad web app updates through its service worker; Mac shows a download link. Bump `nativeVersion` in package.json whenever `android/` or Capacitor plugins change, so older Android installs are sent to the new APK instead.
 
 ## Data
 

@@ -2,6 +2,9 @@
 // Page tools act on the open page (set by page.js through setPage); Study and
 // Help work anywhere.
 import * as store from '../store.js';
+import { exportDialog } from '../notes/exportui.js';
+import { shareDialog } from '../cloud/ui.js';
+import { checkForUpdates } from '../update.js';
 import { $, h, toast, menu } from '../ui.js';
 import { tb, inkBar, prefs, savePrefs } from '../notes/inkbar.js';
 import { aiSettingsDialog } from '../notes/aiui.js';
@@ -11,7 +14,14 @@ import { startTour, featureGuide, faqDialog, backupDialog } from './help.js';
 
 const TABS = [['home', 'Home'], ['insert', 'Insert'], ['draw', 'Draw'], ['study', 'Study'], ['help', 'Help']];
 const TEXT_HL = [['Yellow', '#fff29a'], ['Green', '#c9f2c7'], ['Pink', '#ffd0e4'], ['Blue', '#cfe6ff'], ['Orange', '#ffdcb0']];
-export const FONTS = ['Segoe UI', 'Calibri', 'Arial', 'Verdana', 'Georgia', 'Times New Roman', 'Cambria', 'Consolas', 'Comic Sans MS', 'Segoe Print'];
+import { platform, isDesktop, GENERIC_FONTS, installedFonts, fontStack } from '../platform.js';
+// The page's default font is the system font; pages from older versions may name others.
+const fontChoices = current => {
+  const named = installedFonts();
+  const list = [...GENERIC_FONTS.map(([label]) => label), ...named];
+  if (current && !list.includes(current)) list.push(current);
+  return list;
+};
 const SIZES = [11, 12, 13, 14, 15.5, 17, 19, 22, 26, 32];
 const state = { tab: 'home', page: null, hash: '#/' };
 
@@ -47,7 +57,9 @@ export function refresh() {
   const p = state.page;
   const nb = context(state.hash).nb;
   const none = !p; // no page open: page tools are greyed out
-  const off = none ? { disabled: true } : {};
+  const ro = !!p?.readonly; // a notebook shared with you as "Can view"
+  const off = none || ro ? { disabled: true } : {};
+  const offView = none ? { disabled: true } : {}; // reading tools still work when view only
   const needNb = fn => () => (nb ? fn(nb) : toast('Create or open a notebook first'));
   const withPage = fn => async () => { await p?.flush(); fn(); };
   const scope = p?.page ? `p:${p.page.id}` : 'all';
@@ -57,7 +69,7 @@ export function refresh() {
     panel = [
       group('Font', 'font',
         h('select', { class: 'rb-select font', title: 'Font: applies to the selected text, or to the whole page when nothing is selected', ...off, onchange: e => p.setFont(e.target.value) },
-          FONTS.map(f => h('option', { value: f, text: f, style: `font-family:'${f}'`, selected: (p?.page?.font || 'Segoe UI') === f }))),
+          fontChoices(p?.page?.font).map(f => h('option', { value: f, text: f, style: `font-family:${fontStack(f)}`, selected: (p?.page?.font || 'System') === f }))),
         h('select', { class: 'rb-select size', title: 'Text size: applies to the selected text, or to the whole page when nothing is selected', ...off, onchange: e => p.setSize(+e.target.value) },
           SIZES.map(s => h('option', { value: s, text: s === 15.5 ? '15.5 (normal)' : s, selected: (p?.page?.size || 15.5) === s })))),
       group('Text', 'format',
@@ -72,32 +84,42 @@ export function refresh() {
         TEXT_HL.map(([name, c]) => { const b = tb('', `Highlight: ${name}`, () => p.exec('hiliteColor', c), 'swatch', off); b.style.background = c; return b; }),
         tb('⦸', 'Remove highlight', () => p.exec('hiliteColor', 'transparent'), '', off),
         tb('💬 Comment', 'Attach a comment to the selected text', () => p.addComment(), '', off)),
+      group('Ask AI', 'ask',
+        tb('✨ Ask AI', 'Ask about the highlighted text (Ctrl+J), or about the whole page when nothing is highlighted. Highlighting text also shows an Ask button beside it', () => p.askSelection(), 'accent-tb', offView),
+        tb('⬚ Ask about an area', 'Drag a box around a diagram, drawing or part of the page and ask about it', () => p.askArea(), '', offView),
+        tb(p?.isDictating() ? '■ Stop dictating' : '🎤 Dictate', 'Speak and your words are typed where the cursor is', () => p.dictate(), p?.isDictating() ? 'on' : '', { ...off, 'data-tour': 'dictate' })),
       group('Page', null,
         tb('＋ Heading', 'Add a new heading to this page', () => p.addTopic(), '', off),
-        tb('⤓ Save as PDF', 'Export this page, with highlights and ink, as a PDF', () => p.exportPdf(), '', off)),
+        tb(p?.nb?.cloud ? '👥 Shared' : '🔗 Share', 'Share this notebook with classmates (they can view or edit), or make a view-only link', withPage(() => shareDialog(p.nb)), p?.nb?.cloud ? 'on' : '', { ...offView, 'data-tour': 'share' }),
+        tb('⤴ Export', 'Export this page or notebook to Word, PowerPoint, Google Docs or Slides, Notion, Evernote or Obsidian', withPage(() => exportDialog(p.nb, p.page.id, { exportPdf: () => p.exportPdf() })), '', { ...offView, 'data-tour': 'export' }),
+        tb(isDesktop ? '⤓ Save as PDF' : '⎙ Print / PDF', isDesktop ? 'Export this page, with highlights and ink, as a PDF' : 'Print this page, or save it as a PDF from the print screen', () => p.exportPdf(), '', offView)),
     ];
   } else if (state.tab === 'insert') {
     const fresh = p?.newPhotos() || 0;
     panel = [
-      group('Photos to turn into notes', 'insert-photos',
-        big('🖼', 'Photos', 'Choose image files from this computer', () => p.choosePhotos(), { disabled: none }),
-        big('📱', 'Phone camera', 'Show a QR code, then take pictures with your phone', () => p.phoneCamera(), { disabled: none }),
+      group('Sources to turn into notes', 'insert-photos',
+        big('🖼', 'Photos', 'Choose image files from this device', () => p.choosePhotos(), { disabled: none || ro }),
+        platform.qr ? big('📱', 'Phone camera', 'Show a QR code, then take pictures with your phone', () => p.phoneCamera(), { disabled: none || ro })
+          : big('📷', 'Camera', 'Take a photo with this device\'s camera', () => p.phoneCamera(), { disabled: none || ro, tour: 'camera' }),
+        big('📄', 'Document', 'Add a PDF, Word (.docx), PowerPoint (.pptx) or text file', () => p.chooseDocument(), { disabled: none || ro, tour: 'insert-doc' }),
+        p?.canRecord() !== false ? big('🎙', 'Record', 'Record a lecture or voice note with the microphone', () => p.record(), { disabled: none || ro, tour: 'insert-record' }) : null,
+        big('🎧', 'Audio file', 'Add a recording (MP3, M4A, WAV and more)', () => p.chooseAudio(), { disabled: none || ro }),
         h('span', { class: 'rb-hint', text: 'or drag in · Ctrl+V' })),
       group('Pictures in your notes', 'insert-pictures',
-        big('🏞', 'Picture', 'Place an image in your notes. You can move it, resize it and draw on it', () => p.choosePicture(), { disabled: none }),
-        big('📎', 'Clippings', 'Diagrams found in your photos, plus clean versions redrawn by the AI, ready to drop into your notes', () => p.pics.toggleDock(), { disabled: none, badge: p?.page ? (p.pics.unused() || '') : '' })),
-      group('Photos → notes', 'insert-generate',
-        big('✨', 'Turn photos into notes', 'The AI reads the new photos on this page and writes organized notes', () => p.generate(false), { disabled: none || !fresh, badge: fresh || '', cls: fresh ? 'accent' : '' }),
-        tb('↻ Rewrite all', 'Write the notes again from every photo on this page', () => p.generate(true), '', none || !p.page?.images.length ? { disabled: true } : {})),
+        big('🏞', 'Picture', 'Place an image in your notes. You can move it, resize it and draw on it', () => p.choosePicture(), { disabled: none || ro }),
+        big('📎', 'Clippings', 'Diagrams found in your photos, plus clean versions redrawn by the AI, ready to drop into your notes', () => p.pics.toggleDock(), { disabled: none || ro, badge: p?.page ? (p.pics.unused() || '') : '' })),
+      group('Sources → notes', 'insert-generate',
+        big('✨', 'Turn into notes', 'The AI reads the new photos, documents and recordings on this page and writes organized notes', () => p.generate(false), { disabled: none || ro || !fresh, badge: fresh || '', cls: fresh ? 'accent' : '' }),
+        tb('↻ Rewrite all', 'Write the notes again from everything on this page', () => p.generate(true), '', none || ro || !(p.page?.images.length || p.page?.docs?.length || p.page?.audio?.length) ? { disabled: true } : {})),
     ];
   } else if (state.tab === 'draw') {
     const auto = tb('✍ Stylus draws', 'When on, touching the page with a stylus starts drawing straight away',
       () => { prefs.autoPen = !prefs.autoPen; savePrefs(); refresh(); }, prefs.autoPen ? 'on' : '');
     panel = [
       h('div', { class: 'rb-group-box' }, h('div', { class: 'rb-row' },
-        tb('<span class="rb-ico">𝖳</span>Type', 'Stop drawing: type, select and edit text', () => p.setMode('text'), p && p.getMode() === 'text' ? 'on' : '', off),
+        tb('<span class="rb-ico">𝖳</span>Type', 'Stop drawing: type, select and edit text', () => p.setMode('text'), p && p.getMode() === 'text' ? 'on' : '', none ? { disabled: true } : {}),
         h('span', { class: 'rb-sep' }),
-        inkBar({ getMode: () => (p ? p.getMode() : 'text'), setMode: m => p?.setMode(m), history: p?.history, disabled: none }),
+        inkBar({ getMode: () => (p ? p.getMode() : 'text'), setMode: m => p?.setMode(m), history: p?.history, disabled: none || ro }),
         h('span', { class: 'rb-sep' }), auto),
       h('div', { class: 'rb-caption', text: 'Pick a pen, then draw on the page with a mouse, finger or stylus' })),
     ];
@@ -121,7 +143,8 @@ export function refresh() {
         tb(`${store.db().settings.tourOnStartup ? '☑' : '☐'} Tour at startup`, 'Play the guided tour every time Study Hall opens', () => { store.setTourOnStartup(!store.db().settings.tourOnStartup); toast(store.db().settings.tourOnStartup ? 'The tour will play when Study Hall opens' : 'The tour won\'t play at startup. Replay it here any time.'); }, store.db().settings.tourOnStartup ? 'on' : '', { 'data-startup-toggle': '' })),
       group('Settings', null,
         big('⚙', 'AI setup', 'Choose the free, local or paid AI option', () => aiSettingsDialog()),
-        big('💾', 'Backup', 'Export or restore your flashcard sets', () => backupDialog())),
+        big('💾', 'Backup', 'Back up to iCloud Drive, export everything, or restore', () => backupDialog(), { tour: 'backup' }),
+        big('⟳', 'Check for updates', 'See if a newer version of Study Hall is out. Updates also download by themselves', () => checkForUpdates(), { tour: 'updates' })),
     ];
   }
 

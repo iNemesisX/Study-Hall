@@ -1,6 +1,6 @@
 // All app data lives in one object that is saved as JSON.
-// In Electron it goes to %APPDATA%/Study Hall/studyhall-data.json (via preload.js);
-// in a plain browser it falls back to localStorage so the UI can be previewed.
+// In Electron it goes to %APPDATA%/Study Hall/studyhall-data.json (via preload.js); in the
+// tablet / browser version it goes to IndexedDB (web/bridge.js); with neither, localStorage.
 import { uid } from './ui.js';
 
 const KEY = 'studyhall-data';
@@ -41,7 +41,7 @@ function sanitize(d) {
     .map(s => sanitizeSet(s, folderIds));
   return {
     version: 1,
-    settings: { theme: oneOf(d.settings?.theme, ['light', 'dark'], 'light'), tourDone: d.settings?.tourDone === true, tourOnStartup: d.settings?.tourOnStartup !== false },
+    settings: { theme: oneOf(d.settings?.theme, ['light', 'dark'], 'light'), tourDone: d.settings?.tourDone === true, tourOnStartup: d.settings?.tourOnStartup !== false, backup: sanitizeBackup(d.settings?.backup), obsidianVault: typeof d.settings?.obsidianVault === 'string' && d.settings.obsidianVault.length < 1000 ? d.settings.obsidianVault : null },
     folders,
     sets,
     studyDays: list(d.studyDays).filter(x => typeof x === 'string' && DAY.test(x)).slice(-400),
@@ -121,6 +121,8 @@ export function flush() {
   else try { localStorage.setItem(KEY, json); } catch (e) { console.warn('Preview storage full', e); }
 }
 
+// Tablets suspend or close apps in the background without warning: save straight away.
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) flush(); });
 window.addEventListener('beforeunload', () => {
   if (!dirty) return;
   const json = JSON.stringify(data);
@@ -132,6 +134,19 @@ export function setTheme(theme) { data.settings.theme = theme; save(); }
 export function setTourDone(done = true) { data.settings.tourDone = done; save(); }
 /** Whether the guided tour plays each time the app opens (on by default). */
 export function setTourOnStartup(on) { data.settings.tourOnStartup = !!on; save(); }
+/** Automatic backups: { folder (desktop), lastAt, lastFile, remind (tablets: weekly reminder) } */
+export function setObsidianVault(folder) { data.settings.obsidianVault = folder; save(); }
+export function setBackup(patch) { data.settings.backup = sanitizeBackup({ ...data.settings.backup, ...patch }); save(); }
+function sanitizeBackup(b) {
+  b = b && typeof b === 'object' ? b : {};
+  return {
+    folder: typeof b.folder === 'string' && b.folder.length < 1000 ? b.folder : null,
+    lastAt: Number.isFinite(b.lastAt) ? b.lastAt : 0,
+    lastFile: typeof b.lastFile === 'string' && b.lastFile.length < 1200 ? b.lastFile : null,
+    remind: b.remind !== false,
+    snoozeAt: Number.isFinite(b.snoozeAt) ? b.snoozeAt : 0,
+  };
+}
 export const setsForNotebook = id => data.sets.filter(s => s.notebookId === id);
 
 // ---------- Folders ----------
@@ -239,10 +254,25 @@ export function importJSON(text) {
   listeners.forEach(fn => fn());
 }
 
+/** Adds the sets and folders from a backup that aren't here yet (matched by id). Returns how many sets were added. */
+export function mergeJSON(text) {
+  const parsed = JSON.parse(text);
+  if (!isObj(parsed) || !Array.isArray(parsed.sets)) throw new Error('This file is not a Study Hall backup.');
+  const incoming = sanitize(parsed);
+  const folderIds = new Set(data.folders.map(f => f.id));
+  for (const f of incoming.folders) if (!folderIds.has(f.id)) data.folders.push(f);
+  const setIds = new Set(data.sets.map(s => s.id));
+  const added = incoming.sets.filter(s => !setIds.has(s.id));
+  data.sets.push(...added);
+  flush();
+  listeners.forEach(fn => fn());
+  return added.length;
+}
+
 export const dataPath = () => api?.dataPath() ?? Promise.resolve(null);
 
 // ---------- First run ----------
 // Starts empty; the Welcome notebook and its sample set are added by notes/sample.js.
 function sampleData() {
-  return { version: 1, settings: { theme: 'light', tourDone: false, tourOnStartup: true }, folders: [], studyDays: [], sets: [] };
+  return { version: 1, settings: { theme: 'light', tourDone: false, tourOnStartup: true, backup: sanitizeBackup() }, folders: [], studyDays: [], sets: [] };
 }

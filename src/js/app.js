@@ -13,6 +13,9 @@ import { pageView } from './views/page.js';
 import { studyView } from './views/study.js';
 import { libraryView } from './views/home.js';
 import { startTour } from './views/help.js';
+import { startAutoBackups } from './notes/backup.js';
+import * as sync from './cloud/sync.js';
+import { startUpdateUi } from './update.js';
 import { folderView } from './views/folder.js';
 import { setView } from './views/set.js';
 import { editorView } from './views/editor.js';
@@ -81,6 +84,7 @@ let ignoreNext = false;
 export function route() {
   current = location.hash || '#/';
   closeMenu();
+  document.body.classList.remove('nav-open'); // the slide-out pane closes once something is chosen
   cleanup?.();
   cleanup = guard = null;
   const main = $('#main');
@@ -123,9 +127,19 @@ nbstore.onChange(() => { renderNav(current); ribbon.refresh(); });
 onAiChange(refreshAi);
 nbstore.api?.onUsage(() => refreshAi()); // an AI request was sent: update the counter and any limit warning
 window.addEventListener('hashchange', onHashChange);
+// Tapping the dimmed page beside the slide-out pane closes it.
+document.querySelector('.workspace').addEventListener('click', e => { if (e.target === e.currentTarget) document.body.classList.remove('nav-open'); });
 safely('app bar', renderAppbar);
 refreshAi().catch(() => {});
 safely('first page', route);
+if (nbstore.api) {
+  sync.onChange(() => { safely('app bar', renderAppbar); renderNav(current); ribbon.refresh(); }); // signed in or out, or sharing changed
+  sync.init().catch(e => console.warn('Sharing unavailable', e));
+}
+if (nbstore.api) startAutoBackups();
+safely('updates', startUpdateUi);
+// Before restarting into an update, save what's open.
+window.studyhallFlush = async () => { await document.querySelector('.pg-root')?._pg?.flush(); store.flush?.(); await sync.flushPending(); }; // daily backups to the chosen folder (desktop) or a weekly reminder (tablets)
 // The guided tour plays every time the app opens until the user turns it off.
 if (nbstore.api && store.db().settings.tourOnStartup) {
   const begin = () => startTour().catch(e => console.error('Tour failed to start', e));

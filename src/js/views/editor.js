@@ -215,7 +215,7 @@ export function editorView(root, setId, folderId, opts = {}) {
           The set's link works too. Terms, definitions and images are copied into this set. Public sets only.</p>
         <textarea class="input" id="qz-code" rows="4" spellcheck="false" placeholder='<iframe src="https://quizlet.com/123456789/learn/embed?x=1jj1" …></iframe>'></textarea>
         <p class="small" id="qz-status" role="status" style="min-height:22px;margin:10px 0 0"></p>
-        ${api?.importQuizlet ? '' : '<p class="small feedback bad">Importing from Quizlet only works in the desktop app, not in the browser preview.</p>'}`,
+        ${api?.importQuizlet ? '' : '<p class="small feedback bad">Importing by link only works in the Windows or Mac app. On a tablet: on quizlet.com open the set, choose <b>⋯ → Export</b>, copy the text, then use <b>Import text</b> in this editor.</p>'}`,
       actions: [
         { label: 'Cancel', kind: 'ghost' },
         { label: 'Import', kind: 'primary', onClick: async el => {
@@ -223,7 +223,7 @@ export function editorView(root, setId, folderId, opts = {}) {
           const say = (msg, kind = '') => { status.className = `small feedback ${kind}`; status.textContent = msg; };
           const id = quizletSetId($('#qz-code', el).value);
           if (!id) { say("Paste a Quizlet embed code or set link (it should contain quizlet.com/<numbers>).", 'bad'); return false; }
-          if (!api?.importQuizlet) { say('Open Study Hall as the desktop app to import from Quizlet.', 'bad'); return false; }
+          if (!api?.importQuizlet) { say('Importing by link needs the Windows or Mac app. Use Quizlet\'s Export and "Import text" instead.', 'bad'); return false; }
           const buttons = $$('footer .btn, #qz-code', el);
           buttons.forEach(b => { b.disabled = true; });
           say('Loading the set from Quizlet… If a Quizlet window opens, follow what it shows.');

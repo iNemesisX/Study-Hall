@@ -32,10 +32,25 @@ const fake = http.createServer((req, res) => {
     if (req.url.startsWith('/gemini/models/limited')) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] }] } });
     if (req.url.startsWith('/gemini/models/busy')) { seen.busy = (seen.busy || 0) + 1; if (seen.busy === 1) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }, { retryDelay: '1s' }] } }); }
     if (req.url.startsWith('/gemini/models?')) return send(200, { models: [{ name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-x-tts', supportedGenerationMethods: ['generateContent'] }] });
+    if (req.url.startsWith('/gemini/models/limited') === false && req.url.startsWith('/gemini/') && j.tools?.some(t => t.google_search)) {
+      seen.geminiSearch = true;
+      if (req.url.includes('freekey')) return send(429, { error: { message: 'Quota exceeded for grounding' } });
+      return send(200, { candidates: [{ content: { parts: [{ text: 'Impulse equals the change in momentum [1].' }] }, groundingMetadata: { groundingChunks: [{ web: { uri: 'https://example.org/impulse', title: 'example.org' } }] } }] });
+    }
+    if (req.url.startsWith('/gemini/') && /tutor/.test(j.systemInstruction?.parts?.[0]?.text || '')) {
+      seen.askRef = JSON.stringify(j.contents).match(/Reference material from (a web search|Wikipedia)/)?.[1] || null;
+      return send(200, { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ blocks: [{ type: 'paragraph', text: 'Impulse is F times the time.' }], check: { status: 'agrees', used: [1] } }) }] } }] });
+    }
     if (req.url.startsWith('/gemini/')) {
       seen.gemini = { url: req.url, key: req.headers['x-goog-api-key'], img: j.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/jpeg'), schema: !!j.generationConfig.responseJsonSchema, sys: !!j.systemInstruction };
       return send(200, { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '```json\n' + JSON.stringify(doc) + '\n```' }] } }] });
     }
+    if (req.url.startsWith('/wiki?')) {
+      seen.wiki = (seen.wiki || 0) + 1;
+      if (req.url.includes('list=search')) return send(200, { query: { search: [{ title: 'Impulse (physics)' }, { title: 'Momentum' }] } });
+      return send(200, { query: { pages: { 1: { title: 'Impulse (physics)', extract: 'In classical mechanics, impulse is the change in momentum of an object.' }, 2: { title: 'Momentum', extract: 'Momentum is the product of mass and velocity.' } } } });
+    }
+    if (req.url === '/update.json') return send(200, { version: '99.0.0', notes: '- New things', mac: { url: 'https://github.com/iNemesisX/Study-Hall/releases/download/v99.0.0/StudyHall-macOS.dmg' }, windows: { url: 'x', sha256: 'bad' } });
     if (req.url === '/ollama/api/tags') return send(200, { models: [{ name: 'qwen3-vl:8b' }] });
     if (req.url === '/ollama/api/chat') {
       if (j.model === 'missing') return send(404, { error: 'model "missing" not found' });
@@ -56,7 +71,12 @@ fake.listen(0, '127.0.0.1', () => {
   process.env.STUDYHALL_OLD_DIR = old;
   process.env.STUDYHALL_GEMINI_URL = `${base}/gemini`;
   process.env.STUDYHALL_CLAUDE_URL = `${base}/claude`;
+  process.env.STUDYHALL_UPDATE_FEED = `${base}/update.json`;
+  process.env.STUDYHALL_WIKI_URL = `${base}/wiki`;
   app.setPath('userData', data);
+  // A pretend microphone, so recording and dictation can be checked.
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream');
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream');
   require('../main.js');
   app.whenReady().then(() => run(base));
 });
@@ -105,7 +125,7 @@ async function run(base) {
     await shot('03b-tour-pictures');
     await nextBtn(); await sleep(300);
     await js(`document.querySelector('[data-tab="insert"]').click();`); await sleep(500);
-    check('Insert tab step', (await tip()).includes('Three ways'));
+    check('Insert tab step covers photos, documents and recordings', (await tip()).includes('Photos, documents and recordings') && await js(`return document.querySelector('.tour-tip').textContent.includes('Record')`));
     await shot('04-tour-insert');
     await nextBtn(); await sleep(300);
     await js(`document.querySelector('[data-tab="draw"]').click();`); await sleep(500);
@@ -121,6 +141,10 @@ async function run(base) {
     await js(`document.querySelector('[data-tab="home"]').click();`); await sleep(500);
     check('part 1 ends on fonts, highlights and comments', (await tip()).includes('Fonts, highlights'));
     check('step cards show no stray text', await js(`return !document.querySelector('.tour-tip').textContent.includes('null')`));
+    await nextBtn(); await sleep(300);
+    check('tour teaches Ask AI (highlight → Ask), areas and dictation', (await tip()).includes('Ask the AI') && await js(`const t = document.querySelector('.tour-tip').textContent; return t.includes('Highlight') && t.includes('Dictate') && t.includes('checked against Wikipedia') && t.includes('Look it up')`));
+    await nextBtn(); await sleep(300);
+    check('tour teaches sharing and every export target', (await tip()).includes('Share and export') && await js(`const t = document.querySelector('.tour-tip').textContent; return ['Word', 'Google Docs', 'PowerPoint', 'Google Slides', 'Notion', 'Evernote', 'Obsidian', 'view-only link'].every(x => t.includes(x))`));
     await nextBtn(); await sleep(300);
     check('checkpoint after part 1 offers to continue or finish', (await tip()).includes('Part 1 done') && await js(`return [...document.querySelectorAll('.tour-tip button')].some(b => b.textContent === 'Finish for now') && document.querySelector('.tour-tip .btn.primary').textContent.includes('part 2')`));
     await shot('06a-tour-checkpoint');
@@ -147,7 +171,12 @@ async function run(base) {
     check('checkpoint after part 2', (await tip()).includes('Part 2 done'));
     await nextBtn(); await sleep(400);
     check('part 3: AI setup step', (await tip()).includes('Set up the AI') && await js(`return document.querySelector('.tour-count').textContent.includes('Part 3 of 3')`));
-    await nextBtn(); await sleep(200); await nextBtn(); await sleep(500);
+    check('AI step explains the local model (Ask AI works; recordings need Gemini)', await js(`const t = document.querySelector('.tour-tip').textContent; return t.includes('local model') && t.includes('Ask AI included') && t.includes('Recordings and dictation still use')`));
+    await nextBtn(); await sleep(400);
+    check('tour teaches backups to iCloud Drive', (await tip()).includes('iCloud Drive') && await js(`return document.querySelector('.tour-tip').textContent.includes('once a day')`));
+    await nextBtn(); await sleep(400);
+    check('tour shows the account button for sharing', (await tip()).includes('Your account'));
+    await nextBtn(); await sleep(300); await nextBtn(); await sleep(500);
     check('tour ends, is remembered, and suggests next steps', await js(`const m = await import('./js/store.js'); return !document.querySelector('.tour-layer') && m.db().settings.tourDone && document.querySelector('.modal h2').textContent.includes('ready')`));
     await shot('07-tour-finish');
     await js(`document.querySelector('.modal [data-action="0"]').click();`);
@@ -157,7 +186,7 @@ async function run(base) {
       const nb = (await import('./js/notes/nbstore.js')).list().find(n => n.sample); const m = await import('./js/store.js');
       return nb.sections.length === 2 && nb.sections[0].pages.length === 3 && nb.sections[1].pages[0].kind === 'guide' && m.setsForNotebook(nb.id).length === 1`));
     await js(`document.querySelector('[data-tab="help"]').click();`); await clickText('.rb.big', 'Feature guide'); await sleep(300);
-    check('feature guide lists every feature', await js(`return document.querySelectorAll('.modal .feature').length === 12`));
+    check('feature guide lists every feature', await js(`return document.querySelectorAll('.modal .feature').length === 17`));
     await shot('08-feature-guide');
     await js(`document.querySelector('.modal [data-close]').click();`);
 
@@ -206,6 +235,13 @@ async function run(base) {
     check('a diagram reply without shapes is rejected', String(fd).includes('empty'));
     check('Ollama missing model tells you the pull command', (await msg(() => ai.generateNotes({ provider: 'ollama', url: `${base}/ollama`, model: 'missing' }, args))).includes('ollama pull missing'));
     check('Ollama not running is explained', (await msg(() => ai.generateNotes({ provider: 'ollama', url: 'http://127.0.0.1:9', model: 'm' }, args))).includes('Install it from ollama.com'));
+    const askArgs = { question: 'Why?', selection: 'impulse and momentum', notebookName: 'Physics', pageTitle: 'Momentum', context: '', history: [] };
+    const wikiAns = await ai.ask({ provider: 'gemini', apiKey: 'k', model: 'gemini-3.5-flash' }, { ...askArgs, verify: 'wiki' });
+    check('Ask AI answers are checked against Wikipedia (free, no key)', seen.askRef === 'Wikipedia' && wikiAns.checkedWith === 'wikipedia' && wikiAns.check.status === 'agrees' && wikiAns.sources.length === 1 && wikiAns.sources[0].url === 'https://en.wikipedia.org/wiki/Impulse_(physics)');
+    const webAns = await ai.ask({ provider: 'gemini', apiKey: 'k', model: 'gemini-3.5-flash' }, { ...askArgs, verify: 'web' });
+    check('with web search on, Gemini searches Google and the answer lists those sources', seen.geminiSearch && seen.askRef === 'a web search' && webAns.checkedWith === 'web' && webAns.sources[0].url === 'https://example.org/impulse');
+    const freeAns = await ai.ask({ provider: 'gemini', apiKey: 'k', model: 'freekey' }, { ...askArgs, verify: 'web' });
+    check('a free Gemini key falls back to Wikipedia and says why', freeAns.checkedWith === 'wikipedia' && /paid key/.test(freeAns.notice || ''));
     check('model lists load', (await ai.listModels({ provider: 'gemini', apiKey: 'k' })).join() === 'gemini-3.5-flash' && (await ai.listModels({ provider: 'ollama', url: `${base}/ollama` })).join() === 'qwen3-vl:8b');
     process.env.STUDYHALL_MOCK = '1';
 
@@ -250,7 +286,7 @@ async function run(base) {
     check('phone photo lands on the open page', await js(`return ${PG}.page.images.length === 2 && document.querySelector('[data-count]').textContent.startsWith('1 photo')`));
     await js(`document.querySelector('.modal [data-action="0"]').click();`); await sleep(300);
     await shot('11-photos-waiting');
-    await clickText('.rb.big', 'Turn photos into notes'); await sleep(1200);
+    await clickText('.rb.big', 'Turn into notes'); await sleep(1200);
     check('notes written into topics, page titled, photos marked used', await js(`return document.querySelectorAll('.pg-topic').length === 2 && ${PG}.page.title === 'Newtonian Mechanics' && ${PG}.newPhotos() === 0 && document.querySelectorAll('.pg-text .katex').length >= 3`));
     check('page title shows in the page list', await js(`return document.querySelector('.page-item.on').textContent.includes('Newtonian Mechanics')`));
 
@@ -317,15 +353,15 @@ async function run(base) {
       [...document.querySelectorAll('.pg-pop .btn')].find(b => b.textContent === 'Save').click();`);
     check('comment stored', await js(`return ${PG}.page.topics[0].html.includes('data-note="Ask about this in class"')`));
     /* ---- fonts ---- */
-    await js(`getSelection().removeAllRanges(); await new Promise(r => setTimeout(r, 60)); const sel = document.querySelector('.rb-select.font'); sel.value = 'Georgia'; sel.dispatchEvent(new Event('change'));`);
-    check('font with nothing selected applies to the whole page', await js(`return ${PG}.page.font === 'Georgia' && getComputedStyle(document.querySelector('.pg-text p')).fontFamily.includes('Georgia') && document.querySelector('.rb-select.font').value === 'Georgia'`));
+    await js(`getSelection().removeAllRanges(); await new Promise(r => setTimeout(r, 60)); const sel = document.querySelector('.rb-select.font'); sel.value = 'Serif'; sel.dispatchEvent(new Event('change'));`);
+    check('font with nothing selected applies to the whole page', await js(`return ${PG}.page.font === 'Serif' && getComputedStyle(document.querySelector('.pg-text p')).fontFamily === 'serif' && document.querySelector('.rb-select.font').value === 'Serif'`));
     await js(`const p = document.querySelectorAll('.pg-text li')[2]; const r = document.createRange(); r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
       await new Promise(r => setTimeout(r, 50)); document.querySelector('.rb-select.font').focus();
-      const f = document.querySelector('.rb-select.font'); f.value = 'Consolas'; f.dispatchEvent(new Event('change'));`);
+      const f = document.querySelector('.rb-select.font'); f.value = 'Monospace'; f.dispatchEvent(new Event('change'));`);
     await js(`const p = document.querySelectorAll('.pg-text li')[2]; const r = document.createRange(); r.selectNodeContents(p); const s = getSelection(); s.removeAllRanges(); s.addRange(r);
       await new Promise(r => setTimeout(r, 50));
       const z = document.querySelector('.rb-select.size'); z.value = '22'; z.dispatchEvent(new Event('change'));`);
-    check('font and size with text selected apply to that text only', await js(`const html = ${PG}.page.topics[0].html; return /font-family: ?Consolas/.test(html) && /font-size: ?22px/.test(html) && !html.includes('xxx-large') && ${PG}.page.font === 'Georgia'`));
+    check('font and size with text selected apply to that text only', await js(`const html = ${PG}.page.topics[0].html; return /font-family: ?monospace/.test(html) && /font-size: ?22px/.test(html) && !html.includes('xxx-large') && ${PG}.page.font === 'Serif'`));
     await js(`document.querySelector('[data-tab="draw"]').click();`);
     const stroke = (pen, y) => js(`document.querySelector('[data-pen="${pen}"]').click();
       const svg = document.querySelector('.pg-topic svg.pg-ink'); const b = svg.getBoundingClientRect();
@@ -355,6 +391,7 @@ async function run(base) {
     const pdf = await win.webContents.printToPDF({ printBackground: true });
     fs.writeFileSync(path.join(out, 'notes.pdf'), pdf);
     check('PDF export renders', pdf.length > 5000);
+    check('AI notice is left out of PDF exports', await js(`const rules = [...document.styleSheets].flatMap(sh => { try { return [...sh.cssRules]; } catch { return []; } }).filter(r => r.media && r.media.mediaText.includes('print')).map(r => r.cssText).join(' '); return /\\.ai-credit[^}]*display: none/.test(rules) && /\\.dg-credit[^}]*display: none/.test(rules)`));
 
     /* ---- sections and pages ---- */
     await clickText('.nav-add', 'Add section'); await sleep(200);
@@ -402,6 +439,199 @@ async function run(base) {
     await js(`location.hash = '#/library';`); await sleep(500);
     check('library groups sets by notebook, incl. the migrated one', await js(`return document.querySelectorAll('.set-card').length === 4 && document.querySelector('#main').textContent.includes('Chem 110') && !!document.querySelector('a[href="#/import"]')`));
 
+    /* ---- documents, recordings, dictation ---- */
+    await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(900);
+    await js(`document.querySelector('[data-tab="insert"]').click();`); await sleep(200);
+    check('Insert tab offers Document, Record and Audio file', await js(`const t = document.querySelector('#ribbon').textContent; return t.includes('Document') && t.includes('Record') && t.includes('Audio file') && t.includes('Turn into notes')`));
+    await js(`
+      const pdf = '%PDF-1.4\\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\\ntrailer<</Root 1 0 R>>\\n%%EOF';
+      const rate = 8000, n = rate * 2, buf = new DataView(new ArrayBuffer(44 + n * 2));
+      const str = (o, t) => [...t].forEach((c, i) => buf.setUint8(o + i, c.charCodeAt(0)));
+      str(0, 'RIFF'); buf.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); buf.setUint32(16, 16, true); buf.setUint16(20, 1, true); buf.setUint16(22, 1, true);
+      buf.setUint32(24, rate, true); buf.setUint32(28, rate * 2, true); buf.setUint16(32, 2, true); buf.setUint16(34, 16, true); str(36, 'data'); buf.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) buf.setInt16(44 + i * 2, Math.sin(i / 8) * 8000, true);
+      await ${PG}.addFiles([new File([pdf], 'Syllabus.pdf', { type: 'application/pdf' }), new File(['Momentum p = mv is conserved.'], 'Reading.txt', { type: 'text/plain' }), new File([buf.buffer], 'Lecture 3.wav', { type: 'audio/wav' }), new File(['x'], 'virus.exe')]);`);
+    await sleep(500);
+    check('documents and audio are stored as page sources', await js(`const p = ${PG}.page; return p.docs.length === 2 && p.audio.length === 1 && p.docs[0].ext === 'pdf' && document.querySelectorAll('.pg-file').length === 3 && !!document.querySelector('.pg-file audio')`));
+    const topicsBefore = await js(`return ${PG}.page.topics.reduce((n, t) => n + t.html.length, 0)`);
+    await clickText('.rb.big', 'Turn into notes');
+    for (let i = 0; i < 60 && !(await js(`return ${PG}.page.docs.every(d => d.processed) || !!document.querySelector('.modal')`)); i++) await sleep(250);
+    await sleep(400);
+    const gen = await js(`const p = ${PG}.page; return { a: p.audio[0].processed, t: p.audio[0].transcript, d: p.docs.map(d => d.processed), n: p.topics.reduce((n, t) => n + t.html.length, 0), modal: document.querySelector('.modal')?.textContent, busy: document.querySelector('#busy')?.textContent }`);
+    check('recordings are written out, then documents and recordings become notes', gen.a && String(gen.t).includes('cell division') && gen.d.every(Boolean) && gen.n > topicsBefore);
+    if (!(gen.a && gen.n > topicsBefore)) console.log('  ', JSON.stringify(gen), topicsBefore);
+    check('the transcript can be read', await js(`[...document.querySelectorAll('.pg-file .btn')].find(b => b.textContent === 'Transcript').click(); await new Promise(r => setTimeout(r, 300)); const ok = document.querySelector('.modal .transcript')?.textContent.includes('Mitosis'); document.querySelector('.modal [data-close]').click(); return ok`));
+    await shot('17a-sources');
+    await js(`${PG}.record();`); await sleep(1800);
+    check('recording shows a timer', await js(`return !!document.querySelector('.modal .rec-time') && document.querySelector('.modal .rec-time').textContent !== ''`));
+    await shot('17b-recording');
+    await clickText('.modal .btn', 'Stop and save'); await sleep(1500);
+    check('a voice recording is saved to the page', await js(`const a = ${PG}.page.audio; return a.length === 2 && a[1].recorded && !a[1].processed`));
+    await js(`const t = document.querySelector('.pg-text'); t.focus(); const r = document.createRange(); r.selectNodeContents(t); r.collapse(false); getSelection().removeAllRanges(); getSelection().addRange(r); document.dispatchEvent(new Event('selectionchange'));`); await sleep(100);
+    await js(`document.querySelector('[data-tab="home"]').click();`); await sleep(100);
+    await clickText('#ribbon .rb', 'Dictate'); await sleep(1500);
+    check('dictation records (Dictate button shows Stop)', await js(`return ${PG}.isDictating() && document.querySelector('#ribbon').textContent.includes('Stop dictating')`));
+    await clickText('#ribbon .rb', 'Stop dictating'); await sleep(2500);
+    check('dictated words are typed into the notes', await js(`return ${PG}.page.topics.some(t => t.html.includes('powerhouse of the cell'))`));
+
+    /* ---- Ask AI ---- */
+    await js(`const p = [...document.querySelectorAll('.pg-text p')].find(x => x.textContent.length > 20); const r = document.createRange(); r.selectNodeContents(p); getSelection().removeAllRanges(); getSelection().addRange(r); document.dispatchEvent(new Event('selectionchange'));`);
+    await sleep(500);
+    check('highlighting text shows the Ask chat button beside it', await js(`return !!document.querySelector('.ask-bubble')`));
+    await shot('17c-ask-bubble');
+    await js(`document.querySelector('.ask-bubble').click();`); await sleep(300);
+    check('the chat panel opens with the highlighted text', await js(`return !!document.querySelector('.ask-panel blockquote') && document.querySelectorAll('.ask-chips .chip-btn').length === 6`));
+    await js(`[...document.querySelectorAll('.ask-chips .chip-btn')].find(b => b.textContent.includes('derive')).click();`); await sleep(900);
+    check('an answer comes back with steps and the AI notice', await js(`const a = document.querySelector('.ask-a .ask-a-body'); return !!a && a.querySelectorAll('ol li').length === 3 && document.querySelector('.ask-credit').textContent.includes('can be wrong')`));
+    check('the answer says it was checked against Wikipedia, with source links', await js(`const c = document.querySelector('.ask-check.ok'); return !!c && c.textContent.includes('Checked against Wikipedia') && [...c.querySelectorAll('.ask-sources a')].some(a => a.href.includes('wikipedia.org/wiki/Impulse'))`));
+    await js(`[...document.querySelectorAll('.ask-head .btn')].find(b => b.textContent.includes('Look it up')).click();`); await sleep(200);
+    check('"Look it up" offers Google, Wikipedia, YouTube and Khan Academy', await js(`const t = document.querySelector('.menu')?.textContent || ''; return ['Google', 'Wikipedia', 'YouTube', 'Khan Academy'].every(x => t.includes(x))`));
+    await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); document.body.click();`); await sleep(150);
+    check('AI setup has the web search switch', await js(`(await import('./js/notes/aiui.js')).aiSettingsDialog(); await new Promise(r => setTimeout(r, 400)); const ok = !!document.querySelector('.modal [data-f="websearch"]'); document.querySelector('.modal [data-close]').click(); return ok`));
+    await js(`const t = document.querySelector('.ask-input textarea'); t.value = 'Why is impulse useful?'; t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));`); await sleep(900);
+    check('follow-up questions continue the conversation', await js(`return document.querySelectorAll('.ask-q').length === 2 && document.querySelectorAll('.ask-a-body').length === 2`));
+    await shot('17d-ask-panel');
+    await js(`document.querySelector('.ask-a-foot .btn').click();`); await sleep(700);
+    check('an answer can be inserted into the notes, marked as AI, with its sources', await js(`return !!document.querySelector('.pg-text .ai-answer .ai-answer-tag') && ${PG}.page.topics.some(t => t.html.includes('ai-answer') && t.html.includes('ai-sources'))`));
+    await js(`document.querySelector('.ask-head .icon-btn').click();`); await sleep(200);
+    await js(`${PG}.askArea();`); await sleep(200);
+    check('"Ask about an area" shows a box-drawing layer', await js(`return !!document.querySelector('.ask-area')`));
+    await js(`const a = document.querySelector('.ask-area'); const r = document.querySelector('.pg-topic').getBoundingClientRect();
+      const ev = (type, x, y) => a.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 }));
+      ev('pointerdown', r.left + 5, r.top + 5); ev('pointermove', r.right - 5, r.top + 200); ev('pointerup', r.right - 5, r.top + 200);`); await sleep(900);
+    check('the boxed area opens a chat about the text inside it', await js(`return !!document.querySelector('.ask-panel') && document.querySelector('.ask-panel .ask-ctx').textContent.length > 20`));
+    await js(`document.querySelector('.ask-head .icon-btn').click();`);
+    check('the Ask button is on each picture', await js(`return document.querySelectorAll('.pg-pic .pic-ask').length >= 1`));
+
+    /* ---- exports ---- */
+    const ex = await js(`
+      const X = await import('./js/notes/exporters.js');
+      const nbs = await import('./js/notes/nbstore.js');
+      const nb = nbs.get('${nbId}');
+      const pages = await X.prepare(nb, '${pageId}');
+      const JSZip = await (await import('./js/notes/sources.js')).loadScript('jszip/dist/jszip.min.js', 'JSZip');
+      const docx = await X.buildDocx(nb, pages, { single: true });
+      const dz = await JSZip.loadAsync(docx); const xml = await dz.file('word/document.xml').async('string');
+      const media = Object.keys(dz.files).filter(f => f.startsWith('word/media/')).length;
+      const pptx = await X.buildPptx(nb, pages, { single: true });
+      const pz = await JSZip.loadAsync(pptx); const slides = Object.keys(pz.files).filter(f => /^ppt\\/slides\\/slide\\d+\\.xml$/.test(f)).length;
+      const enex = new TextDecoder().decode(await X.buildEnex(nb, pages));
+      const parsed = new DOMParser().parseFromString(enex, 'application/xml');
+      const md = X.buildMarkdown(nb, pages, { single: true });
+      const S = await import('./js/notes/sources.js');
+      const back = await S.prepareDoc({ name: 'x', ext: 'docx' }, docx, 'gemini');
+      const backP = await S.prepareDoc({ name: 'x', ext: 'pptx' }, pptx, 'gemini');
+      return { word: xml.includes('Newtonian Mechanics') && xml.includes('Cambria Math'), media, slides, enex: !parsed.querySelector('parsererror') && parsed.querySelectorAll('note').length === 1 && enex.includes('<en-media'),
+        enexHash: (() => { const h = enex.match(/hash="([0-9a-f]{32})"/); return !!h; })(),
+        md: md.some(f => f.path.endsWith('.md') && f.text.includes('## ') && f.text.includes('$$')) && md.some(f => f.path.startsWith('attachments/')),
+        round: back.text.includes('Newtonian Mechanics'), roundP: backP.text.includes('Slide 2') };`);
+    check('Word export has the notes, formulas and pictures', ex.word && ex.media >= 1);
+    check('PowerPoint export makes a slide per heading (and pictures)', ex.slides >= 4);
+    check('Evernote export is valid ENEX with pictures', ex.enex && ex.enexHash);
+    check('Obsidian export is Markdown with headings, math and attachments', ex.md);
+    check('Study Hall can read its own Word and PowerPoint exports back in', ex.round && ex.roundP);
+    const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'vault-'));
+    require('../files').testPick(vault);
+    await js(`const st = await import('./js/store.js'); st.setObsidianVault(${JSON.stringify(vault)});`);
+    await js(`document.querySelector('[data-tab="home"]').click();`); await sleep(100);
+    await clickText('#ribbon .rb', 'Export'); await sleep(400);
+    check('Export dialog lists Word, Google Docs, PowerPoint, Google Slides, Notion, Evernote, Obsidian and PDF', await js(`const t = document.querySelector('.modal .export-grid').textContent; return ['Word', 'Google Docs', 'PowerPoint', 'Google Slides', 'Notion', 'Evernote', 'Obsidian', 'PDF'].every(x => t.includes(x))`));
+    await shot('17e-export');
+    await js(`document.querySelector('.modal [data-t="obsidian"]').click();`); await sleep(500);
+    await clickText('.modal .btn', 'Use this vault'); await sleep(1500);
+    const written = fs.existsSync(path.join(vault, 'Study Hall')) ? fs.readdirSync(path.join(vault, 'Study Hall')) : [];
+    check('Obsidian export writes notes and pictures into the vault', written.some(f => f.endsWith('.md')) && written.includes('attachments'));
+    await js(`document.querySelectorAll('.modal [data-close]').forEach(b => b.click());`);
+
+    /* ---- automatic backups ---- */
+    const bdir = fs.mkdtempSync(path.join(os.tmpdir(), 'icloud-'));
+    for (let d = 10; d <= 18; d++) fs.writeFileSync(path.join(bdir, `studyhall-backup-2026-01-${d}.json`), '{}');
+    require('../files').testPick(bdir);
+    await js(`const st = await import('./js/store.js'); st.setBackup({ folder: ${JSON.stringify(bdir)}, lastAt: 0 }); const b = await import('./js/notes/backup.js'); await b.backupNow(true);`);
+    const backups = fs.readdirSync(bdir).filter(f => f.startsWith('studyhall-backup-'));
+    const today = backups.find(f => f.includes(new Date().toLocaleDateString('en-CA')));
+    check('daily backup is written to the chosen (iCloud) folder', !!today && JSON.parse(fs.readFileSync(path.join(bdir, today), 'utf8')).kind === 'studyhall-export');
+    check('only the last 7 backups are kept', backups.length === 7);
+    check('backups include documents and recordings', (() => { const j = JSON.parse(fs.readFileSync(path.join(bdir, today), 'utf8')); return Object.keys(j.notebooks.find(n => n.notebook.id === nbId).images).some(f => /\.(wav|webm|pdf)$/.test(f)); })());
+    check('folders the user never picked are refused', await js(`return (await window.studyhall.files.remember('/etc')) === false && (await window.studyhall.files.write('/etc', [{ path: 'x', text: 'y' }]).then(() => 'wrote', e => 'refused')) === 'refused'`));
+    await js(`document.querySelector('[data-tab="help"]').click();`); await sleep(100);
+    await clickText('#ribbon .rb', 'Backup'); await sleep(500);
+    const bt = await js(`return document.querySelector('.modal')?.textContent || ''`);
+    check('Backup dialog shows automatic backups and the last one', bt.includes('Automatic backups') && bt.includes('keeps the last 7') && bt.includes('today'));
+    if (!bt.includes('today')) console.log('  ', bt.slice(0, 400));
+    await shot('17f-backups');
+    await js(`document.querySelector('.modal [data-close]').click();`);
+
+    /* ---- accounts and sharing (stand-in service, pretend classmates) ---- */
+    const B = `(await (await import('./js/cloud/backend.js')).getBackend())`;
+    await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(900);
+    check('app bar has a sign-in button', await js(`return !!document.querySelector('#appbar .account-btn')`));
+    await js(`document.querySelector('[data-tab="home"]').click();`); await sleep(100);
+    await clickText('#ribbon .rb', 'Share'); await sleep(500);
+    check('sharing asks you to sign in first', await js(`return document.querySelector('.modal h2').textContent.includes('Sign in')`));
+    await js(`const i = document.querySelector('.modal [data-email]'); i.value = 'me@school.edu'; document.querySelector('.modal footer .btn.primary').click();`); await sleep(400);
+    check('a 6-digit code is emailed (no password)', await js(`return !document.querySelector('.modal [data-step="code"]').hidden && document.querySelector('.modal [data-sent]').textContent.includes('me@school.edu')`));
+    await js(`document.querySelector('.modal [data-code]').value = '000000'; document.querySelector('.modal footer .btn.primary').click();`); await sleep(400);
+    check('a wrong code is explained', await js(`return document.querySelector('.modal [data-status]').textContent.includes("didn't work")`));
+    await js(`document.querySelector('.modal [data-code]').value = '123456'; document.querySelector('.modal footer .btn.primary').click();`); await sleep(600);
+    check('signing in shows your initial in the app bar', await js(`return document.querySelector('#appbar .account-btn.in')?.textContent === 'M'`));
+    check('then it asks before uploading the notebook', await js(`return document.querySelector('.modal h2')?.textContent.includes('Share this notebook')`));
+    await clickText('.modal .btn', 'Share'); await sleep(2500);
+    check('the notebook and its pages and files go online', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; const pages = await b.pages(nb.cloud.id); const files = await b.fileList(nb.cloud.id); return nb.cloud.role === 'owner' && pages.length >= 3 && files.length >= 3`));
+    check('the Share dialog opens with invite and link options', await js(`return !!document.querySelector('.modal [data-invite]') && !!document.querySelector('.modal [data-link]')`));
+    await js(`document.querySelector('.modal [data-email]').value = 'Classmate@School.edu'; document.querySelector('.modal [data-role]').value = 'editor'; document.querySelector('.modal [data-invite]').click();`); await sleep(600);
+    check('inviting adds them and gives you a message to send', await js(`return [...document.querySelectorAll('.modal')].some(m => m.textContent.includes('classmate@school.edu can now open'))`));
+    await js(`[...document.querySelectorAll('.modal')].pop().querySelector('[data-close]').click();`); await sleep(200);
+    await js(`const c = document.querySelector('.modal [data-link]'); c.checked = true; c.dispatchEvent(new Event('change'));`); await sleep(500);
+    const linkUrl = await js(`return document.querySelector('.modal [data-url]').value`);
+    check('view-only link is made', /view\.html#[\w-]{20,}$/.test(linkUrl));
+    await shot('17g-share');
+    await js(`document.querySelector('.modal [data-close]').click();`);
+    const token = linkUrl.split('#')[1];
+    check('the link shows the notebook to anyone, without signing in', await js(`const b = ${B}; const d = await b.as('nobody@x.org', x => x.byLink('${token}')); return d?.name && d.pages.length >= 3`));
+    check('the people list knows who can edit', await js(`const nbs = await import('./js/notes/nbstore.js'); const s = await import('./js/cloud/sync.js'); const m = await s.members(nbs.get('${nbId}')); return m.length === 1 && m[0].email === 'classmate@school.edu' && m[0].role === 'editor'`));
+    // the classmate edits the page you have open
+    await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B};
+      await b.as('classmate@school.edu', async x => { const [p] = (await x.pages(nb.cloud.id)).filter(r => r.page_id === '${pageId}'); p.data.topics[0].html += '<p>Added by classmate</p>'; await x.putPage(nb.cloud.id, '${pageId}', p.data); });`);
+    await sleep(4500);
+    check('a classmate\'s change appears live on your open page', await js(`return document.querySelector('.pg-text').textContent.includes('Added by classmate')`));
+    // you edit; they see it
+    await js(`const t = document.querySelector('.pg-text'); t.insertAdjacentHTML('beforeend', '<p>Owner reply</p>'); t.dispatchEvent(new Event('input'));`);
+    await sleep(800);
+    await js(`await ${PG}.flush(); const s = await import('./js/cloud/sync.js'); await s.flushPending();`);
+    check('your changes are sent to collaborators', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; const p = await b.as('classmate@school.edu', x => x.pages(nb.cloud.id)); return p.find(r => r.page_id === '${pageId}').data.topics[0].html.includes('Owner reply')`));
+    check('a viewer can\'t change the notebook (database rules)', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; await b.invite(nb.cloud.id, 'reader@school.edu', 'viewer'); return await b.as('reader@school.edu', x => x.putPage(nb.cloud.id, 'zzz', { id: 'zzz' }).then(() => 'wrote', () => 'refused')) === 'refused'`));
+    check('strangers can\'t read it', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; return await b.as('stranger@x.org', x => x.pages(nb.cloud.id).then(() => 'read', () => 'refused')) === 'refused'`));
+    // a teacher shares a notebook with you, view only
+    await js(`const b = ${B}; await b.as('teacher@school.edu', async x => { const nb = await x.createNotebook({ name: 'Physics 201 (Dr. Lee)', color: '#0f7b6c', meta: { sections: [{ id: 's1', name: 'Week 1', pages: [{ id: 'tp1', title: 'Kinematics' }] }] } });
+      await x.putPage(nb.id, 'tp1', { id: 'tp1', title: 'Kinematics', created: 1, images: [], topics: [{ id: 't1', heading: 'Velocity', html: '<p>v = dx/dt</p>', ink: [] }] }); await x.invite(nb.id, 'me@school.edu', 'viewer'); });`);
+    await js(`(await import('./js/cloud/ui.js')).sharedWithMe();`); await sleep(600);
+    check('"Shared with me" lists the teacher\'s notebook', await js(`return document.querySelector('.modal').textContent.includes('Physics 201') && document.querySelector('.modal').textContent.includes('teacher@school.edu')`));
+    await clickText('.modal .btn', 'Add'); await sleep(1500);
+    check('adding it opens a synced copy', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.list().find(n => n.name.startsWith('Physics 201')); return !!nb && nb.cloud.role === 'viewer' && location.hash.includes(nb.id)`));
+    await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.list().find(n => n.name.startsWith('Physics 201')); location.hash = '#/nb/' + nb.id + '/p/tp1';`); await sleep(900);
+    check('a view-only notebook can be read but not edited', await js(`return document.querySelector('.pg-text').textContent.includes('v = dx/dt') && document.querySelector('.pg-text').contentEditable === 'false' && !!document.querySelector('.pg-readonly')`));
+    await js(`document.querySelector('[data-tab="home"]').click();`); await sleep(100);
+    check('editing tools are off, but Ask AI and Export still work', await js(`const b = t => [...document.querySelectorAll('#ribbon .rb')].find(x => x.textContent.includes(t)); return b('B').disabled && !b('Ask AI').disabled && !b('Export').disabled`));
+    await shot('17h-view-only');
+    check('the view-only page cleans shared notes (no scripts or tricks)', await js(`window.STUDYHALL_VIEWER_TEST = true; const v = await import('./js/viewer.js'); const out = v.clean('<p onclick="x()">Hi <b>there</b><script>bad()</script><img src=x onerror=y><a href="javascript:z">l</a><span style="background:url(http://e)">s</span></p>'); return out.includes('<b>there</b>') && !/script|onclick|onerror|<img|javascript|url\\(/.test(out)`));
+    await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(700);
+    await js(`(await import('./js/cloud/sync.js')).signOut();`); await sleep(300);
+    check('signing out keeps notebooks on the device', await js(`const nbs = await import('./js/notes/nbstore.js'); return !document.querySelector('#appbar .account-btn.in') && nbs.list().some(n => n.name.startsWith('Physics 201'))`));
+
+    check('FAQ answers every new feature', await js(`const { FAQ } = await import('./js/faq.js'); const ids = FAQ.flatMap(g => g.items.map(i => i.id)); return ['documents', 'record', 'dictate', 'ask', 'web-search', 'share', 'view-link', 'view-only', 'stop-sharing', 'export', 'icloud', 'install-other'].every(x => ids.includes(x))`));
+    check('feature guide lists every feature', await js(`const { FEATURES } = await import('./js/views/help.js'); const t = FEATURES.map(f => f.title).join(' | '); return ['documents', 'Record', 'Ask the AI', 'Share', 'Export to Word', 'iCloud'].every(x => t.includes(x))`));
+
+    /* ---- updates ---- */
+    const upd = require('../updater');
+    check('version numbers compare correctly', upd.newer('2.10.0', '2.9.9') && !upd.newer('2.6.0', '2.6.0') && !upd.newer('2.5.9', '2.6.0'));
+    await js(`document.querySelector('[data-tab="help"]').click();`); await sleep(100);
+    await clickText('#ribbon .rb', 'Check for updates'); await sleep(1200);
+    check('a newer release shows an update card', await js(`const c = document.querySelector('.update-card'); return !!c && c.textContent.includes('99.0.0')`));
+    await shot('17i-update');
+    await js(`[...document.querySelectorAll('.update-card .btn')].find(b => b.textContent === 'Later').click();`);
+    check('"Later" hides it', await js(`return !document.querySelector('.update-card')`));
+
     /* ---- reopen, dark theme ---- */
     await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(800);
     check('reopening restores notes, ink and comment', await js(`return document.querySelectorAll('.pg-topic > svg.pg-ink path').length === 5 && document.querySelectorAll('.pg-cmt').length === 1 && document.querySelectorAll('.pg-pic').length === 2 && document.querySelectorAll('.pg-pic svg.pic-ink path').length === 1 && document.querySelector('.pg-pic.diagram .dg-label').textContent === 'Mass (kg)'`));
@@ -428,7 +658,7 @@ async function run(base) {
     check('Help → Tour at startup turns it back on', await js(`return !!document.querySelector('.tour-layer')`));
     check('no console errors', errors.length === 0);
     if (errors.length) console.log(errors.join('\n'));
-  } catch (e) { console.log('FAIL  exception:', e.stack); process.exitCode = 1; }
+  } catch (e) { console.log('FAIL  exception:', e.stack); if (errors.length) console.log(errors.join('\n')); process.exitCode = 1; }
   console.log('screenshots in', out);
   app.exit(process.exitCode || 0);
 }

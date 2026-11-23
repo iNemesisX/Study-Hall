@@ -12,16 +12,20 @@ const emit = () => listeners.forEach(fn => fn());
 export const list = () => items;
 export const get = id => items.find(n => n.id === id);
 export const onChange = fn => listeners.add(fn);
+/** Set by cloud/sync.js so shared notebooks send their changes: pageSaved(nb, page), metaSaved(nb), pageRemoved(nb, pageId). */
+export const hooks = {};
 
 export async function load() {
   if (!api) return;
   try { items = await api.list(); } catch (e) { console.error(e); }
+  emit();
 }
 
 async function saveMeta(nb) {
   nb.updated = Date.now();
   await api.saveNotebook(nb);
   emit();
+  hooks.metaSaved?.(nb);
 }
 export const saveNotebook = saveMeta;
 
@@ -45,7 +49,7 @@ export async function addSection(nb, name, extra = {}) {
   return sec;
 }
 export async function removeSection(nb, sec) {
-  for (const p of sec.pages) await api.removePage(nb.id, p.id);
+  for (const p of sec.pages) { await api.removePage(nb.id, p.id); hooks.pageRemoved?.(nb, p.id); }
   nb.sections = nb.sections.filter(s => s !== sec);
   await saveMeta(nb);
 }
@@ -54,6 +58,7 @@ export async function removeSection(nb, sec) {
 export async function addPage(nb, sec, { title = 'Untitled page', kind = 'notes', topics = [], images = [], aiBy } = {}) {
   const page = { id: uid(), title, kind, created: Date.now(), updated: Date.now(), images, topics, ...(aiBy ? { aiBy } : {}) };
   await api.savePage(nb.id, page);
+  hooks.pageSaved?.(nb, page);
   sec.pages.push({ id: page.id, title, kind });
   await saveMeta(nb);
   return page;
@@ -61,6 +66,7 @@ export async function addPage(nb, sec, { title = 'Untitled page', kind = 'notes'
 export const loadPage = (nbId, pageId) => api.loadPage(nbId, pageId);
 export async function savePage(nb, page) {
   await api.savePage(nb.id, page);
+  hooks.pageSaved?.(nb, page);
   const meta = findPage(nb, page.id)?.meta;
   if (meta && meta.title !== page.title) { meta.title = page.title; await saveMeta(nb); }
 }
@@ -69,6 +75,7 @@ export async function removePage(nb, pageId) {
   const hit = findPage(nb, pageId);
   if (!hit) return;
   await api.removePage(nb.id, pageId);
+  hooks.pageRemoved?.(nb, pageId);
   hit.sec.pages = hit.sec.pages.filter(p => p.id !== pageId);
   await saveMeta(nb);
 }

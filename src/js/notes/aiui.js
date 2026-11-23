@@ -1,6 +1,7 @@
 // AI setup dialog and the shared "something went wrong" handling for AI actions.
 import * as nbstore from './nbstore.js';
 import { $, $$, esc, modal, toast, busy, confirmDialog } from '../ui.js';
+import { platform } from '../platform.js';
 
 const api = nbstore.api;
 export const PROVIDERS = {
@@ -32,6 +33,7 @@ export function fail(e) {
   busy(null);
   const msg = errText(e);
   if (msg.includes('NO_KEY')) return aiSettingsDialog('Set up the AI first. The Gemini option is free.');
+  if (msg.includes('NO_GEMINI')) return aiSettingsDialog('Recordings are turned into text with Google Gemini (free). Add a Gemini key here. If you use another AI, you can switch back to it afterwards: the Gemini key is kept for recordings.');
   modal({ title: 'That didn\'t work', body: `<p>${esc(msg)}</p>`, actions: [{ label: 'AI setup', kind: 'ghost', onClick: () => { aiSettingsDialog(); } }, { label: 'OK', kind: 'primary' }] });
 }
 
@@ -62,7 +64,7 @@ export async function aiSettingsDialog(note) {
       ${note ? `<p class="callout-note">${esc(note)}</p>` : ''}
       <p class="muted small">The AI reads your photos and writes the notes, flashcards and study guides. Everything it writes is marked with the model that wrote it. AI-generated content can be wrong, so check it against your class materials. Pick one option. You can switch any time. <a href="#" data-faq-link>Step-by-step help in the FAQ</a></p>
       <div class="ai-choices">
-        ${Object.entries(PROVIDERS).map(([id, p]) => `<button class="ai-choice ${id === provider ? 'on' : ''}" data-pick="${id}" type="button">
+        ${Object.entries(PROVIDERS).map(([id, p]) => `<button class="ai-choice ${id === provider ? 'on' : ''} ${id === 'ollama' && !platform.ollama ? 'unavailable' : ''}" data-pick="${id}" type="button">
           <b>${esc(p.name)}</b><span class="pill">${esc(p.tag)}</span></button>`).join('')}
       </div>
       <div class="ai-panel" data-p="gemini">
@@ -74,6 +76,8 @@ export async function aiSettingsDialog(note) {
         <p class="muted small">Free, with daily limits that reset at midnight Pacific time. On the free tier, Google may use what you send to improve its products, so don't photograph anything private.</p>
       </div>
       <div class="ai-panel" data-p="ollama">
+        ${!platform.ollama ? `<p class="callout-note">Ollama isn't available in the ${platform.os === 'ios' ? 'iPad' : 'browser'} version of Study Hall, because a web app can't reach programs on your local network. Choose Google Gemini (free) here, or use Ollama from the desktop or Android app.</p>`
+          : platform.kind === 'android' ? `<p class="callout-note">On a tablet, Ollama runs on a computer on the same Wi-Fi. On that computer, set the environment variable <code>OLLAMA_HOST=0.0.0.0</code>, restart Ollama, and enter the computer's address below, for example <code>http://192.168.1.10:11434</code>.</p>` : ''}
         <ol class="steps"><li>Install Ollama from <a href="https://ollama.com/download" target="_blank" rel="noopener">ollama.com/download</a>.</li>
           <li>Open a terminal and run <code>ollama pull ${esc(s.ollama.model)}</code> (a download of several GB).</li><li>Press <b>Test connection</b> below.</li></ol>
         <label class="select-wrap">Ollama address<input class="input" data-f="url" value="${esc(s.ollama.url)}" spellcheck="false"></label>${modelField('ollama')}
@@ -91,6 +95,8 @@ export async function aiSettingsDialog(note) {
           .map(([v, t]) => `<option value="${v}" ${s.detail === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
       <label class="opt-row" style="margin-top:10px"><span>Draw clean versions of diagrams<br><span class="muted small">When photos contain diagrams, the AI also redraws each one as an editable diagram. Uses one extra AI request per diagram.</span></span>
         <input type="checkbox" class="switch" data-f="autodraw" ${s.autoDraw ? 'checked' : ''}></label>
+      <label class="opt-row" style="margin-top:10px"><span>Check Ask AI answers with a web search<br><span class="muted small">Answers are always checked against Wikipedia (free). With this on, Gemini (paid key) or Claude searches the web instead and shows its sources. Uses one extra AI request per question, plus the search fee on your key. Free Gemini keys fall back to Wikipedia.</span></span>
+        <input type="checkbox" class="switch" data-f="websearch" ${s.webSearch ? 'checked' : ''}></label>
       <p class="ai-status" data-status></p>`,
     onMount: (el, close) => {
       const show = () => {
@@ -123,7 +129,8 @@ export async function aiSettingsDialog(note) {
       } },
       { label: 'Cancel', kind: 'ghost' },
       { label: 'Save', kind: 'primary', onClick: async el => {
-        const patch = { provider, detail: $('[data-f="detail"]', el).value, autoDraw: $('[data-f="autodraw"]', el).checked };
+        if (provider === 'ollama' && !platform.ollama) { const st = $('[data-status]', el); st.textContent = 'Ollama isn\'t available in this version. Choose Gemini or Claude.'; st.className = 'ai-status bad'; return false; }
+        const patch = { provider, detail: $('[data-f="detail"]', el).value, autoDraw: $('[data-f="autodraw"]', el).checked, webSearch: $('[data-f="websearch"]', el).checked };
         for (const p of Object.keys(PROVIDERS)) patch[p] = form(p);
         await api.setSettings(patch);
         listeners.forEach(fn => fn());

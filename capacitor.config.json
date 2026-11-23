@@ -1,0 +1,22 @@
+{
+  "appId": "com.studyhall.app",
+  "appName": "Study Hall",
+  "webDir": "dist-web",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": false
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "appReadyTimeout": 10000,
+      "resetWhenUpdate": true
+    }
+  }
+}

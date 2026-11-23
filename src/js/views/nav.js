@@ -1,4 +1,7 @@
 // Left navigation: notebook picker, then sections and pages side by side.
+import { exportDialog } from '../notes/exportui.js';
+import { accountButton, shareDialog, sharedWithMe } from '../cloud/ui.js';
+import * as sync from '../cloud/sync.js';
 import * as store from '../store.js';
 import * as nbstore from '../notes/nbstore.js';
 import { $, h, menu, confirmDialog, promptDialog, toast } from '../ui.js';
@@ -23,6 +26,10 @@ export function context(hash) {
   }
   return { nb, sec, pageId, view };
 }
+
+/** On narrow screens (tablets in portrait) the navigation pane slides in over the page. */
+export const navIsDrawer = () => getComputedStyle($('#nav')).position === 'fixed';
+export function toggleNav(open = !document.body.classList.contains('nav-open')) { document.body.classList.toggle('nav-open', open); }
 
 export async function newNotebook() {
   if (!nbstore.api) return toast('Notebooks need the desktop app');
@@ -52,7 +59,10 @@ function notebookMenu(anchor, current) {
     'sep',
     { label: 'New notebook', icon: '＋', onClick: newNotebook },
     { label: 'All flashcard sets', icon: '📚', onClick: () => { location.hash = '#/library'; } },
+    { label: 'Notebooks shared with me…', icon: '👥', onClick: () => sharedWithMe() },
     ...(current ? ['sep',
+      { label: sync.isShared(current) ? `Sharing: "${current.name}"…` : `Share "${current.name}"…`, icon: '🔗', onClick: () => shareDialog(current) },
+      { label: `Export "${current.name}"…`, icon: '⤴', onClick: () => exportDialog(current, null) },
       { label: `Rename "${current.name}"`, icon: '✎', onClick: async () => {
         const name = await promptDialog('Rename notebook', 'Notebook name', current.name);
         if (name) { current.name = name; await nbstore.saveNotebook(current); }
@@ -86,6 +96,7 @@ function pageMenu(anchor, nb, sec, meta) {
       await nbstore.saveNotebook(nb);
     } })),
     ...(others.length ? ['sep'] : []),
+    { label: 'Export page…', icon: '⤴', onClick: () => exportDialog(nb, meta.id) },
     { label: 'Delete page', icon: '🗑', kind: 'danger', onClick: async () => {
       if (!(await confirmDialog('Delete page?', `"${meta.title}" with its photos, notes and annotations will be deleted.`))) return;
       const here = location.hash.endsWith(`/p/${meta.id}`);
@@ -107,7 +118,9 @@ export function renderNav(hash) {
   const current = sec || (view === 'page' ? null : nb.sections[0]) || null;
   el.replaceChildren(
     h('button', { class: 'nb-picker', 'data-tour': 'notebooks', title: 'Switch notebook, or create a new one', onclick: e => notebookMenu(e.currentTarget, nb) },
-      h('i', { class: 'nbchip', style: `background:${nb.color}` }), h('b', { text: nb.name }), h('span', { class: 'muted', text: '▾' })),
+      h('i', { class: 'nbchip', style: `background:${nb.color}` }), h('b', { text: nb.name }),
+      nb.cloud ? h('span', { class: 'nb-shared', title: nb.cloud.role === 'owner' ? 'You share this notebook' : `Shared with you by ${nb.cloud.owner} (${nb.cloud.role === 'editor' ? 'can edit' : 'view only'})`, text: nb.cloud.role === 'viewer' ? '👁' : '👥' }) : null,
+      h('span', { class: 'muted', text: '▾' })),
     h('a', { class: `nav-study ${view === 'study' || view === 'set' ? 'on' : ''}`, href: `#/nb/${nb.id}/study`, 'data-tour': 'studyhub' },
       h('span', { text: '🎓' }), h('span', { text: 'Study tools' }), h('span', { class: 'muted small', text: `${store.setsForNotebook(nb.id).length || ''}` })),
     h('div', { class: 'nav-cols' },
@@ -161,9 +174,11 @@ function usageBanner(u) {
 export function renderAppbar() {
   const theme = store.db().settings.theme;
   $('#appbar').replaceChildren(
+    h('button', { class: 'bar-btn nav-toggle', title: 'Notebooks and pages', 'aria-label': 'Show notebooks and pages', text: '☰', onclick: () => toggleNav() }),
     h('a', { class: 'logo', href: '#/' }, h('img', { src: 'icon.png', alt: '' }), h('span', { text: 'Study Hall' })),
     h('span', { class: 'spacer' }),
     h('button', { class: `ai-chip ${aiLabel.ready ? '' : 'todo'} ${aiLabel.level}`, 'data-tour': 'ai', title: 'Choose which AI writes your notes', text: aiLabel.text, onclick: () => aiSettingsDialog() }),
+    accountButton(),
     h('button', { class: 'bar-btn', title: 'Help and FAQ', text: '?', 'data-tour': 'help-btn', onclick: () => faqDialog() }),
     h('button', { class: 'bar-btn', title: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', text: theme === 'dark' ? '☀' : '☾',
       onclick: () => { const t = theme === 'dark' ? 'light' : 'dark'; store.setTheme(t); document.body.dataset.theme = t; renderAppbar(); } }));

@@ -47,6 +47,8 @@ ipcMain.on('data:save-sync', (e, json) => {
 });
 ipcMain.handle('data:path', guarded(() => dataFile()));
 require('./notes/main').register(guarded); // Notebooks: photo-to-notes, phone capture, ink
+require('./files').register(guarded, ipcMain); // Backups and exports to folders the user picks
+require('./updater').register(guarded, ipcMain); // Checks for new versions (installs them on Windows)
 ipcMain.handle('quizlet:import', guarded((e, setId) => importQuizletSet(BrowserWindow.fromWebContents(e.sender), setId)));
 
 // Study Hall used to be called StudyDeck. On the first launch, bring the old
@@ -69,7 +71,7 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1360,
     height: 880,
-    minWidth: 1040,
+    minWidth: 760,
     minHeight: 600,
     title: 'Study Hall',
     icon: path.join(__dirname, 'src', 'icon.png'),

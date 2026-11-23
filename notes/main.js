@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const ai = require('./ai');
 const capture = require('./capture');
 const usage = require('./usage');
+ai.configure({ usage });
 
 const MAX_EDGE = 2000;
 const PROVIDERS = ['gemini', 'ollama', 'claude'];
@@ -22,7 +23,10 @@ const DEFAULTS = {
   claude: { model: 'claude-sonnet-5-5' },
 };
 const ID = /^\w{1,40}$/;
-const FILE = /^\w{1,40}\.(jpg|png)$/;
+// Photos plus the documents and recordings a page can hold as sources.
+const FILE = /^\w{1,40}\.(jpg|png|pdf|docx|pptx|txt|md|csv|wav|mp3|m4a|mp4|aac|ogg|oga|webm|flac)$/;
+const SOURCE_EXT = /^(pdf|docx|pptx|txt|md|csv|wav|mp3|m4a|mp4|aac|ogg|oga|webm|flac)$/;
+const MAX_SOURCE = 200 * 1024 * 1024;
 
 const root = () => path.join(app.getPath('userData'), 'notebooks');
 const settingsFile = () => path.join(app.getPath('userData'), 'notes-settings.json');
@@ -79,7 +83,7 @@ function decode(entry) {
 }
 async function loadSettings() {
   const raw = await readJson(settingsFile(), {});
-  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false };
+  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false, webSearch: raw.webSearch === true };
   for (const p of PROVIDERS) s[p] = { ...DEFAULTS[p], ...(raw[p] || {}) };
   if (raw.apiKey && !s.claude.key) { // settings saved by StudyDeck 1.3 (Claude only)
     s.claude.key = raw.apiKey; s.claude.enc = !!raw.apiKeyEncrypted;
@@ -104,6 +108,11 @@ function ctxFor(s, provider, form = {}) {
   return ctx;
 }
 const activeCtx = async () => { const s = await loadSettings(); return ctxFor(s, s.provider); };
+// Audio is always transcribed with Gemini (the other options can't take audio).
+async function geminiCtx() {
+  const s = await loadSettings();
+  try { return ctxFor(s, 'gemini'); } catch (e) { if (String(e.message).includes('NO_KEY')) throw new Error('NO_GEMINI'); throw e; }
+}
 
 /* ---------- images ---------- */
 // Normalises any JPEG/PNG to a JPEG no larger than MAX_EDGE and stores it.
@@ -134,7 +143,7 @@ function register(guarded) {
     const s = await loadSettings();
     const mock = !!process.env.STUDYHALL_MOCK;
     const out = {
-      provider: s.provider, detail: s.detail, autoDraw: s.autoDraw,
+      provider: s.provider, detail: s.detail, autoDraw: s.autoDraw, webSearch: s.webSearch,
       gemini: { model: s.gemini.model, hasKey: mock || !!decode(s.gemini), dailyLimit: +s.gemini.dailyLimit || 0 },
       claude: { model: s.claude.model, hasKey: mock || !!decode(s.claude), dailyLimit: +s.claude.dailyLimit || 0 },
       ollama: { model: s.ollama.model, url: s.ollama.url },
@@ -144,7 +153,7 @@ function register(guarded) {
   });
   on('notes:settings:set', async (patch = {}) => {
     const s = await loadSettings();
-    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw };
+    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw, webSearch: typeof patch.webSearch === 'boolean' ? patch.webSearch : s.webSearch };
     for (const p of PROVIDERS) {
       next[p] = { ...s[p] };
       const f = patch[p] || {};
@@ -203,16 +212,36 @@ function register(guarded) {
 
   /* images */
   on('notes:image:add', (id, name, bytes) => storeImage(id, Buffer.from(bytes), name));
+  on('notes:image:put', async (id, file, bytes) => { await fsp.mkdir(path.join(dir(id), 'images'), { recursive: true }); await fsp.writeFile(imageFile(id, file), Buffer.from(bytes)); });
+  // Documents and recordings are stored as they are.
+  on('notes:file:add', async (id, name, ext, bytes) => {
+    ext = String(ext || '').toLowerCase();
+    if (!SOURCE_EXT.test(ext)) throw new Error('This kind of file can\'t be added');
+    const buf = Buffer.from(bytes);
+    if (buf.length > MAX_SOURCE) throw new Error('That file is too large (over 200 MB)');
+    const fileId = crypto.randomBytes(8).toString('hex');
+    const file = `${fileId}.${ext}`;
+    await fsp.mkdir(path.join(dir(id), 'images'), { recursive: true });
+    await fsp.writeFile(imageFile(id, file), buf);
+    return { id: fileId, file, name: String(name || 'File').slice(0, 200), ext, size: buf.length, processed: false };
+  });
   on('notes:image:read', (id, file) => fsp.readFile(imageFile(id, file)));
   on('notes:image:remove', (id, file) => fsp.rm(imageFile(id, file), { force: true }));
 
   /* AI */
   // Every result says which provider and model made it, for the "AI-generated" notice.
   const signed = async (fn) => { const ctx = await activeCtx(); return { ...(await fn(ctx)), by: { provider: ctx.provider, model: ctx.model } }; };
-  on('notes:ai:notes', async ({ id, files, notebookName, pageTitle, existingHeadings }) => {
+  // docs: [{ name, file }] for PDFs (sent as they are) or [{ name, text, imageBytes? }] for text taken out of other documents.
+  on('notes:ai:notes', async ({ id, files = [], imageBytes = [], docs = [], transcripts = [], notebookName, pageTitle, existingHeadings }) => {
     const images = [];
     for (const f of files) images.push({ mediaType: 'image/jpeg', data: (await fsp.readFile(imageFile(id, f))).toString('base64') });
-    return signed((ctx) => ai.generateNotes(ctx, { images, notebookName, pageTitle, existingHeadings }));
+    for (const b of imageBytes) images.push({ mediaType: 'image/jpeg', data: Buffer.from(b).toString('base64') });
+    const docParts = [];
+    for (const d of docs) {
+      if (d.file) docParts.push({ name: d.name, pdf: (await fsp.readFile(imageFile(id, d.file))).toString('base64') });
+      else docParts.push({ name: d.name, text: d.text, images: (d.imageBytes || []).map((b) => ({ mediaType: 'image/jpeg', data: Buffer.from(b).toString('base64') })) });
+    }
+    return signed((ctx) => ai.generateNotes(ctx, { images, docs: docParts, transcripts, notebookName, pageTitle, existingHeadings }));
   });
   const readImages = async (id, files) => {
     const images = [];
@@ -221,6 +250,11 @@ function register(guarded) {
   };
   on('notes:ai:figures', async ({ id, files }) => ai.findFigures(await activeCtx(), { images: await readImages(id, files) }));
   on('notes:ai:diagram', ({ bytes, label, context }) => signed((ctx) => ai.drawDiagram(ctx, { image: { mediaType: 'image/jpeg', data: Buffer.from(bytes).toString('base64') }, label, context })));
+  on('notes:ai:transcribe', async ({ bytes, mediaType, mode, part, of }) => {
+    const ctx = await geminiCtx();
+    return { ...(await ai.transcribe(ctx, { audio: { mediaType, data: Buffer.from(bytes).toString('base64') }, mode, part, of })), by: { provider: ctx.provider, model: ctx.model } };
+  });
+  on('notes:ai:ask', async (args) => { const verify = (await loadSettings()).webSearch ? 'web' : 'wiki'; return signed((ctx) => ai.ask(ctx, { ...args, verify, image: args.imageBytes ? { mediaType: 'image/png', data: Buffer.from(args.imageBytes).toString('base64') } : undefined })); });
   on('notes:ai:cards', (args) => signed((ctx) => ai.generateCards(ctx, args)));
   on('notes:ai:guide', (args) => signed((ctx) => ai.generateGuide(ctx, args)));
 

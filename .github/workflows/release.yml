@@ -1,0 +1,158 @@
+# Builds Study Hall for every platform on each push to main, publishes the
+# installers as a GitHub release named after package.json's version, and puts the
+# iPad / browser web app on GitHub Pages.
+#
+# Android signing: add these repository secrets (Settings → Secrets and variables
+# → Actions) so every version is signed with the same key and installs as an update:
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+# Without them the Android app is built with a throwaway test key.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: sudo apt-get update -q && sudo apt-get install -y -q nsis
+      - run: npm ci
+      - run: npm run dist:linux
+      - run: mv "dist/StudyHall Installer.exe" dist/StudyHall-Installer-Windows.exe
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: dist/StudyHall-Installer-Windows.exe, if-no-files-found: error }
+
+  mac:
+    name: macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run dist:mac
+        env: { CSC_IDENTITY_AUTO_DISCOVERY: 'false' }
+      - uses: actions/upload-artifact@v4
+        with: { name: mac, path: dist/StudyHall-macOS.dmg, if-no-files-found: error }
+
+  android:
+    name: Android app
+    runs-on: ubuntu-latest
+    env:
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+      - run: npm ci
+      - run: npm run android
+      - name: Signing key
+        if: env.HAS_KEY == 'true'
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - name: Build (signed)
+        if: env.HAS_KEY == 'true'
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleRelease
+          mv app/build/outputs/apk/release/app-release.apk ../StudyHall-Android.apk
+      - name: Build (test key)
+        if: env.HAS_KEY != 'true'
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+          mv app/build/outputs/apk/debug/app-debug.apk ../StudyHall-Android.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: android, path: StudyHall-Android.apk, if-no-files-found: error }
+
+  web:
+    name: iPad / browser web app
+    runs-on: ubuntu-latest
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run build:web
+      # The same files, zipped, are the live update for the Android app (see web/update.js).
+      - run: cd dist-web && zip -qr ../StudyHall-web.zip .
+      - uses: actions/upload-artifact@v4
+        with: { name: webzip, path: StudyHall-web.zip, if-no-files-found: error }
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: dist-web }
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  release:
+    name: Publish release
+    needs: [windows, mac, android, web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          PAGES="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          sed -e "s|__VERSION__|$VERSION|g" -e "s|__PAGES__|$PAGES|g" docs/release-notes.md > notes.md
+          if [ "$SIGNED" != "true" ]; then
+            printf '\n> **Android test build:** this APK is signed with a temporary key, so the next version will not install over it. Uninstall first (export your work via Help → Backup).\n' >> notes.md
+          fi
+          # update.json tells installed copies about this version (updater.js, web/update.js).
+          DL="https://github.com/${GITHUB_REPOSITORY}/releases/download/$TAG"
+          NATIVE=$(node -p "require('./package.json').nativeVersion || require('./package.json').version")
+          sha() { sha256sum "$1" | cut -d' ' -f1; }
+          node -e '
+            const [v, dl, nat, win, mac, apk, web] = process.argv.slice(1);
+            const notes = require("fs").readFileSync("notes.md", "utf8").split("\n").filter(l => l.startsWith("- ")).slice(0, 12).join("\n");
+            console.log(JSON.stringify({ version: v, notes,
+              windows: { url: `${dl}/StudyHall-Installer-Windows.exe`, sha256: win },
+              mac: { url: `${dl}/StudyHall-macOS.dmg`, sha256: mac },
+              android: { url: `${dl}/StudyHall-Android.apk`, sha256: apk },
+              web: { url: `${dl}/StudyHall-web.zip`, sha256: web, minNative: nat } }, null, 2));
+          ' "$VERSION" "$DL" "$NATIVE" "$(sha out/StudyHall-Installer-Windows.exe)" "$(sha out/StudyHall-macOS.dmg)" "$(sha out/StudyHall-Android.apk)" "$(sha out/StudyHall-web.zip)" > out/update.json
+          (cd out && sha256sum StudyHall-Installer-Windows.exe StudyHall-macOS.dmg StudyHall-Android.apk StudyHall-web.zip > SHA256SUMS.txt)
+          cat out/update.json
+          ASSETS=("out/StudyHall-Installer-Windows.exe#StudyHall Installer (Windows)"
+                  "out/StudyHall-macOS.dmg#StudyHall Installer (Mac)"
+                  "out/StudyHall-Android.apk#StudyHall for Android tablets (APK)"
+                  "out/StudyHall-web.zip#Live update for the Android app"
+                  "out/update.json#update.json (used by automatic updates)"
+                  "out/SHA256SUMS.txt#SHA-256 checksums")
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "Study Hall $VERSION" --notes-file notes.md
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --target "$GITHUB_SHA" --title "Study Hall $VERSION" --notes-file notes.md --latest
+          fi

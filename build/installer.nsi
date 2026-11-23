@@ -3,6 +3,7 @@
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 !define APP "Study Hall"
 !define EXE "Study Hall.exe"
@@ -49,6 +50,10 @@ Function DirLeave
 FunctionEnd
 
 Section "Install"
+  ; Automatic updates run Setup silently (/S) right after Study Hall closes: give it a moment to exit.
+  ${If} ${Silent}
+    Sleep 3000
+  ${EndIf}
   SetOutPath "$INSTDIR"
   ; Clear the previous version's program files first (user data lives in %APPDATA% and is not touched).
   RMDir /r "$INSTDIR\locales"
@@ -72,6 +77,13 @@ Section "Install"
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKCU "${REGKEY}" "EstimatedSize" "$0"
 SectionEnd
+
+; After a silent (automatic) update, open Study Hall again.
+Function .onInstSuccess
+  ${If} ${Silent}
+    Exec '"$INSTDIR\${EXE}"'
+  ${EndIf}
+FunctionEnd
 
 Section "Uninstall"
   Delete "$SMPROGRAMS\${APP}.lnk"
