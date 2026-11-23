@@ -579,6 +579,9 @@ async function run(base) {
     await clickText('.modal .btn', 'Share'); await sleep(2500);
     check('the notebook and its pages and files go online', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; const pages = await b.pages(nb.cloud.id); const files = await b.fileList(nb.cloud.id); return nb.cloud.role === 'owner' && pages.length >= 3 && files.length >= 3`));
     check('the Share dialog opens with invite and link options', await js(`return !!document.querySelector('.modal [data-invite]') && !!document.querySelector('.modal [data-link]')`));
+    check('recordings stay on the device (only their transcripts are shared)', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B}; const files = await b.fileList(nb.cloud.id); const pages = await b.pages(nb.cloud.id); return !files.some(f => /\\.(wav|webm|m4a|ogg)$/.test(f)) && pages.some(p => p.data.audio?.some(a => a.transcript))`));
+    await sleep(400);
+    check('the Share window shows how much of the 100 MB is used', await js(`return /MB of 100 MB/.test(document.querySelector('.modal [data-usage]')?.textContent || '') && !!document.querySelector('.modal .usage-meter i')`));
     await js(`document.querySelector('.modal [data-email]').value = 'Classmate@School.edu'; document.querySelector('.modal [data-role]').value = 'editor'; document.querySelector('.modal [data-invite]').click();`); await sleep(600);
     check('inviting adds them and gives you a message to send', await js(`return [...document.querySelectorAll('.modal')].some(m => m.textContent.includes('classmate@school.edu can now open'))`));
     await js(`[...document.querySelectorAll('.modal')].pop().querySelector('[data-close]').click();`); await sleep(200);
@@ -590,6 +593,19 @@ async function run(base) {
     const token = linkUrl.split('#')[1];
     check('the link shows the notebook to anyone, without signing in', await js(`const b = ${B}; const d = await b.as('nobody@x.org', x => x.byLink('${token}')); return d?.name && d.pages.length >= 3`));
     check('the people list knows who can edit', await js(`const nbs = await import('./js/notes/nbstore.js'); const s = await import('./js/cloud/sync.js'); const m = await s.members(nbs.get('${nbId}')); return m.length === 1 && m[0].email === 'classmate@school.edu' && m[0].role === 'editor'`));
+    check('the database refuses recordings and files over the limit', await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B};
+      const r1 = await b.upload(nb.cloud.id, 'x.wav', new Uint8Array(10)).then(() => 'ok', () => 'refused');
+      const r2 = await b.upload(nb.cloud.id, 'big.jpg', new Uint8Array(26 * 1024 * 1024)).then(() => 'ok', () => 'refused');
+      const keep = b.quota; b.quota = (await b.storage()).used; const r3 = await b.upload(nb.cloud.id, 'more.jpg', new Uint8Array(10)).then(() => 'ok', () => 'refused'); b.quota = keep;
+      return r1 === 'refused' && r2 === 'refused' && r3 === 'refused'`));
+    check('when your shared space is full, new photos are skipped with a message and notes still sync', await js(`const nbs = await import('./js/notes/nbstore.js'); const s = await import('./js/cloud/sync.js'); const nb = nbs.get('${nbId}'); const b = ${B};
+      const keep = b.quota; b.quota = (await b.storage()).used;
+      const img = await nbs.api.addImage(nb.id, 'late.jpg', new Uint8Array(await (await fetch('icon.png')).arrayBuffer()));
+      const page = await nbs.loadPage(nb.id, '${pageId}'); page.images.push(img); page.topics[0].html += '<p>quota note</p>'; await nbs.savePage(nb, page); await s.flushPending();
+      b.quota = keep;
+      const remote = (await b.pages(nb.cloud.id)).find(r => r.page_id === '${pageId}');
+      return s.status.skipped.has(img.file) && remote.data.topics[0].html.includes('quota note') && document.querySelector('#toast').textContent.includes('100 MB')`));
+    await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(800);
     // the classmate edits the page you have open
     await js(`const nbs = await import('./js/notes/nbstore.js'); const nb = nbs.get('${nbId}'); const b = ${B};
       await b.as('classmate@school.edu', async x => { const [p] = (await x.pages(nb.cloud.id)).filter(r => r.page_id === '${pageId}'); p.data.topics[0].html += '<p>Added by classmate</p>'; await x.putPage(nb.cloud.id, '${pageId}', p.data); });`);

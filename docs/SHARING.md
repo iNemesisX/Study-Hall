@@ -54,4 +54,13 @@ After the values are in `config.js`, the next release turns sharing on for every
 
 ## Costs
 
-The free plan covers a class or two (at the time of writing: 500 MB database, 1 GB of files, 50,000 monthly users; see [supabase.com/pricing](https://supabase.com/pricing)). Free projects are paused after a week with no activity; opening the dashboard resumes them. For steady use by many people, the Pro plan ($25/month) removes the pause and raises the limits.
+Sharing is designed to stay on Supabase's free plan for as long as possible:
+
+- **Only shared notebooks are uploaded**, never anyone's whole library.
+- **Recordings stay on the device that made them.** Their transcripts and the notes written from them are shared; the audio (the largest files) isn't.
+- **Each person can share up to 100 MB** of photos and documents, and each file can be up to 25 MB. The database enforces this, and the Share window shows each person how much they've used. When someone is full, new photos and documents aren't shared but their notes still sync. To change the limit, edit `storage_quota()` in `schema.sql` and run it again.
+- Text (the notes themselves) is tiny.
+
+The free plan's limits at the time of writing are 500 MB of database, 1 GB of files and 50,000 monthly users (see [supabase.com/pricing](https://supabase.com/pricing)). Free projects are paused after a week with no activity; opening the dashboard resumes them. To see the project's total use, open **Reports** (or **Usage**) in the Supabase dashboard.
+
+If you outgrow it, the Pro plan ($25/month) removes the pause and raises the limits.

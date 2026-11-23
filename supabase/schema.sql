@@ -125,9 +125,22 @@ $$;
 grant execute on function public.shared_by_link(text) to anon, authenticated;
 
 /* ---------- photos, documents and recordings ---------- */
+-- Cost controls: each file at most 25 MB, and each person at most 100 MB of shared files
+-- (change storage_quota() below to adjust). Recordings stay on the device; only their
+-- transcripts are shared.
 insert into storage.buckets (id, name, public, file_size_limit)
-values ('notebook-files', 'notebook-files', false, 209715200)
-on conflict (id) do nothing;
+values ('notebook-files', 'notebook-files', false, 26214400)
+on conflict (id) do update set file_size_limit = excluded.file_size_limit;
+
+create or replace function public.storage_quota() returns bigint language sql immutable as $$ select 100 * 1024 * 1024::bigint $$;
+create or replace function public.storage_used(uid uuid) returns bigint language sql stable security definer set search_path = public, storage as $$
+  select coalesce(sum((o.metadata ->> 'size')::bigint), 0) from storage.objects o where o.bucket_id = 'notebook-files' and o.owner = uid
+$$;
+-- What the Share window shows: { used, quota } in bytes for the signed-in person.
+create or replace function public.my_storage() returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object('used', public.storage_used(auth.uid()), 'quota', public.storage_quota())
+$$;
+grant execute on function public.my_storage() to authenticated;
 
 -- Files live at <notebook id>/<file name>.
 drop policy if exists f_read on storage.objects;
@@ -135,7 +148,9 @@ create policy f_read on storage.objects for select using (
   bucket_id = 'notebook-files' and (public.can_read(((storage.foldername(name))[1])::uuid) or public.link_open(((storage.foldername(name))[1])::uuid)));
 drop policy if exists f_insert on storage.objects;
 create policy f_insert on storage.objects for insert with check (
-  bucket_id = 'notebook-files' and public.can_edit(((storage.foldername(name))[1])::uuid));
+  bucket_id = 'notebook-files' and public.can_edit(((storage.foldername(name))[1])::uuid)
+  and public.storage_used(auth.uid()) < public.storage_quota()
+  and lower(name) !~ '\.(wav|mp3|m4a|mp4|aac|ogg|oga|webm|flac)$');
 drop policy if exists f_update on storage.objects;
 create policy f_update on storage.objects for update using (
   bucket_id = 'notebook-files' and public.can_edit(((storage.foldername(name))[1])::uuid));

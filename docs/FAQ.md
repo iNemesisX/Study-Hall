@@ -245,6 +245,8 @@ Changes sync automatically while you're online and appear live on pages others h
 
 > Only people you invite can open a shared notebook. Notebooks you don't share never leave your device.
 
+Each person can share up to **100 MB** of photos and documents (the Share window shows how much you've used). Recordings stay on your device; their transcripts and the notes made from them are shared. When your space is full, new photos and documents aren't shared, but your notes keep syncing. Stop sharing notebooks you no longer need to free space.
+
 ### Can someone see my notes without installing the app?
 
 Yes. In the Share window, tick **Anyone with the link can view** and press **Copy link**. The link opens a read-only web page; no account is needed. Untick it any time and the link stops working.

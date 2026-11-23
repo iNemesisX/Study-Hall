@@ -60,6 +60,8 @@ async function supabaseBackend() {
     async upload(id, file, bytes, type) { ok(await sb.storage.from(BUCKET).upload(`${id}/${file}`, new Blob([bytes], { type }), { upsert: true, contentType: type })); },
     async download(id, file) { return new Uint8Array(await ok(await sb.storage.from(BUCKET).download(`${id}/${file}`)).arrayBuffer()); },
     async fileList(id) { return ok(await sb.storage.from(BUCKET).list(id, { limit: 10000 })).map(f => f.name); },
+    /** { used, quota } in bytes: the signed-in person's shared files. */
+    async storage() { return ok(await sb.rpc('my_storage')); },
 
     async setLink(id, enabled, token) { ok(await sb.from('notebooks').update({ link_enabled: enabled, ...(token ? { link_token: token } : {}) }).eq('id', id)); },
     async byLink(token) { return ok(await sb.rpc('shared_by_link', { token })); },
@@ -77,7 +79,7 @@ async function supabaseBackend() {
 
 /* ---------- in-memory stand-in for the automated checks ---------- */
 function memoryBackend() {
-  const db = { users: new Map(), notebooks: new Map(), members: [], pages: new Map(), files: new Map(), subs: new Set() };
+  const db = { users: new Map(), notebooks: new Map(), members: [], pages: new Map(), files: new Map(), owners: new Map(), subs: new Set() };
   let current = null;
   let seq = 0;
   const authFns = new Set();
@@ -132,7 +134,15 @@ function memoryBackend() {
       return { version: row.version, updated_at: row.updated_at };
     },
     async deletePage(id, pageId) { if (!canEdit(id)) throw new Error('permission denied'); db.pages.delete(`${id}/${pageId}`); emit(id, 'onPage', { page_id: pageId, deleted: true }); },
-    async upload(id, file, bytes) { if (!canEdit(id)) throw new Error('permission denied'); db.files.set(`${id}/${file}`, new Uint8Array(bytes)); },
+    quota: 100 * 1024 * 1024,
+    async upload(id, file, bytes) {
+      if (!canEdit(id)) throw new Error('permission denied');
+      if (/\.(wav|mp3|m4a|mp4|aac|ogg|oga|webm|flac)$/i.test(file)) throw new Error('new row violates row-level security policy');
+      if (bytes.length > 25 * 1024 * 1024) throw new Error('The object exceeded the maximum allowed size');
+      if ((await api.storage()).used >= api.quota) throw new Error('new row violates row-level security policy');
+      db.files.set(`${id}/${file}`, new Uint8Array(bytes)); db.owners.set(`${id}/${file}`, current.id);
+    },
+    async storage() { const u = need(); let used = 0; for (const [k, b] of db.files) if (db.owners.get(k) === u.id) used += b.length; return { used, quota: api.quota }; },
     async download(id, file) { const nb = db.notebooks.get(id); if (!role(id) && !nb?.link_enabled) throw new Error('Object not found'); const b = db.files.get(`${id}/${file}`); if (!b) throw new Error('Object not found'); return new Uint8Array(b); },
     async fileList(id) { return [...db.files.keys()].filter(k => k.startsWith(`${id}/`)).map(k => k.slice(id.length + 1)); },
     async setLink(id, enabled, token) { if (role(id) !== 'owner') throw new Error('Only the owner can change the view-only link'); Object.assign(db.notebooks.get(id), { link_enabled: enabled, ...(token ? { link_token: token } : {}) }); },

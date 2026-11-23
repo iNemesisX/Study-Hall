@@ -305,8 +305,10 @@ export function pageView(root, nbId, pageId) {
   const AUDIO_MIME = { mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'audio/mp4', aac: 'audio/aac', wav: 'audio/wav', ogg: 'audio/ogg', oga: 'audio/ogg', webm: 'audio/webm', flac: 'audio/flac' };
   function audioPlayer(a) {
     const el = h('audio', { controls: true, preload: 'none', class: 'pg-audio' });
-    imageUrlTyped(a.file, AUDIO_MIME[a.ext] || 'audio/webm').then(u => { el.src = u; }).catch(() => {});
-    return el;
+    const box = h('span', { class: 'pg-audio-box' }, el);
+    imageUrlTyped(a.file, AUDIO_MIME[a.ext] || 'audio/webm').then(u => { el.src = u; })
+      .catch(() => { box.replaceChildren(h('span', { class: 'muted small', text: nb.cloud ? 'Recording kept on the device that made it. Its transcript is here.' : 'Recording missing' })); });
+    return box;
   }
   function imageUrlTyped(file, type) {
     if (!urls.has(file)) urls.set(file, api.readImage(nb.id, file).then(bytes => URL.createObjectURL(new Blob([bytes], { type }))));

@@ -36,7 +36,12 @@ export async function verifyCode(email, code) { user = await (await getBackend()
 export async function signOut() { stopAll(); await (await getBackend()).signOut(); user = null; emit(); }
 
 /* ---------- what's sent up ---------- */
+// Everything a page refers to, and what's uploaded when it's shared. Recordings stay on
+// the device that made them (their transcripts are in the page), to keep storage small.
 const filesOf = page => [...(page.images || []), ...(page.docs || []), ...(page.audio || []), ...(page.topics || []).flatMap(t => t.pics || [])].map(x => x.file).filter(Boolean);
+const AUDIO = /\.(wav|mp3|m4a|mp4|aac|ogg|oga|webm|flac)$/i;
+const MAX_FILE = 25 * 1024 * 1024; // the database refuses bigger files
+export const sharedFilesOf = page => filesOf(page).filter(f => !AUDIO.test(f));
 const uploadedKey = nb => `studyhall-up-${nb.cloud.id}`;
 const uploaded = nb => { try { return new Set(JSON.parse(localStorage.getItem(uploadedKey(nb)) || '[]')); } catch { return new Set(); } };
 const markUploaded = (nb, set) => { try { localStorage.setItem(uploadedKey(nb), JSON.stringify([...set])); } catch { /* full: files are re-checked next time */ } };
@@ -45,12 +50,34 @@ const metaOf = nb => ({ sections: nb.sections.map(s => ({ id: s.id, name: s.name
 async function uploadFiles(nb, names) {
   const b = await getBackend();
   const done = uploaded(nb);
-  for (const f of names) {
-    if (done.has(f)) continue;
-    try { await b.upload(nb.cloud.id, f, await api.readImage(nb.id, f), mimeOf(f)); done.add(f); } catch (e) { console.warn('Upload failed', f, e); }
+  const todo = names.filter(f => !AUDIO.test(f) && !done.has(f));
+  if (!todo.length) return;
+  let space = null;
+  try { space = await b.storage(); } catch { /* unknown: let the database decide */ }
+  for (const f of todo) {
+    try {
+      const bytes = await api.readImage(nb.id, f);
+      if (bytes.length > MAX_FILE) { status.skipped.add(f); status.skipReason = 'big'; continue; }
+      if (space && space.used + bytes.length > space.quota) { status.skipped.add(f); status.skipReason = 'full'; continue; }
+      await b.upload(nb.cloud.id, f, bytes, mimeOf(f));
+      done.add(f);
+      status.skipped.delete(f);
+      if (space) space.used += bytes.length;
+    } catch (e) {
+      status.skipped.add(f);
+      status.skipReason = /security policy|quota/i.test(String(e.message)) ? 'full' : /maximum allowed size/i.test(String(e.message)) ? 'big' : 'error';
+      console.warn('Upload failed', f, e);
+    }
   }
   markUploaded(nb, done);
+  if (status.skipped.size && !status.warned) {
+    status.warned = true;
+    toast(status.skipReason === 'full' ? 'Your 100 MB of shared space is full, so some new photos or documents weren\'t shared. The notes themselves still sync.'
+      : status.skipReason === 'big' ? 'A file over 25 MB wasn\'t shared. The notes still sync.' : 'Some files couldn\'t be uploaded. They\'ll be tried again.');
+  }
 }
+/** { used, quota } in bytes for the signed-in person, or null. */
+export async function storageUse() { try { return await (await getBackend()).storage(); } catch { return null; } }
 
 /** Owner: puts a notebook online. Returns the shared notebook. */
 export async function share(nb, progress) {
@@ -108,7 +135,7 @@ function queueMeta(nb) {
 export async function flushPending() {
   for (const [key, item] of [...pending]) { clearTimeout(item.t); const nb = nbstore.get(key.split('/')[0]); if (nb) await pushPage(nb, key); }
 }
-export const status = { lastSent: 0, error: null };
+export const status = { lastSent: 0, error: null, skipped: new Set(), skipReason: null, warned: false };
 
 // nbstore tells us about local changes.
 nbstore.hooks.pageSaved = (nb, page) => queuePage(nb, page);
@@ -122,7 +149,7 @@ const ownWrites = new Map(); // our own saves come back through the live feed: s
 async function savePulled(nb, row) {
   const page = row.data;
   if (!page?.id) return;
-  for (const f of filesOf(page)) {
+  for (const f of sharedFilesOf(page)) {
     try { await api.readImage(nb.id, f); } catch {
       try { await api.putImage(nb.id, f, await (await getBackend()).download(nb.cloud.id, f)); } catch (e) { console.warn('Download failed', f, e); }
     }

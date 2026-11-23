@@ -122,9 +122,19 @@ async function manage(nb) {
       <p class="muted small">Anyone with the link can read the notes in a web browser, without the app or an account. They can't change anything.</p>
       <label class="row gap"><input type="checkbox" data-link ${link.on ? 'checked' : ''}><span>Anyone with the link can view</span></label>
       <div class="row gap wrap" data-linkrow ${link.on ? '' : 'hidden'}><input class="input share-link" readonly data-url value="${esc(link.url || '')}"><button class="btn" data-copy>Copy link</button></div>` : ''}
-      <p class="muted small" style="margin-top:14px">Changes sync automatically while you're online. If two people change the same page at once, the later save wins.</p>`,
+      <p class="muted small" style="margin-top:14px">Changes sync automatically while you're online. If two people change the same page at once, the later save wins. Recordings stay on the device that made them; their transcripts and the notes from them are shared.</p>
+      <div class="share-usage" data-usage></div>`,
     actions: [{ label: owner ? 'Stop sharing' : 'Leave notebook', kind: 'ghost', onClick: () => { stopSharing(nb); } }, { label: 'Done', kind: 'primary' }],
     onMount: el => {
+      sync.storageUse().then(u => {
+        if (!u || !u.quota) return;
+        const mb = n => (n / 1048576).toFixed(n < 10485760 ? 1 : 0);
+        const pct = Math.min(100, Math.round((u.used / u.quota) * 100));
+        $('[data-usage]', el).replaceChildren(
+          h('div', { class: 'row gap', style: 'justify-content:space-between' }, h('span', { class: 'small', text: 'Your shared photos and documents' }), h('span', { class: 'small muted', text: `${mb(u.used)} MB of ${mb(u.quota)} MB` })),
+          h('div', { class: `usage-meter ${pct >= 90 ? 'full' : pct >= 75 ? 'high' : ''}` }, h('i', { style: `width:${pct}%` })),
+          pct >= 90 ? h('p', { class: 'muted small', text: 'Almost full. New photos and documents won\'t be shared once it\'s full (notes still sync). Stop sharing notebooks you no longer need to free space.' }) : null);
+      });
       const drawPeople = () => {
         $('[data-people]', el).replaceChildren(
           h('div', { class: 'share-person' }, h('span', { class: 'share-avatar', text: (nb.cloud.owner || '?')[0].toUpperCase() }), h('span', { class: 'grow', text: nb.cloud.owner || '' }), h('span', { class: 'muted small', text: 'Owner' })),

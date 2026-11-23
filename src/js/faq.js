@@ -308,6 +308,7 @@ export const FAQ = [
           ] },
           'Changes sync automatically while you\'re online and appear live on pages others have open. If two people change the same page at the same moment, the later save wins.',
           { tip: 'Only people you invite can open a shared notebook. Notebooks you don\'t share never leave your device.' },
+          'Each person can share up to **100 MB** of photos and documents (the Share window shows how much you\'ve used). Recordings stay on your device; their transcripts and the notes made from them are shared. When your space is full, new photos and documents aren\'t shared, but your notes keep syncing. Stop sharing notebooks you no longer need to free space.',
         ],
       },
       {
