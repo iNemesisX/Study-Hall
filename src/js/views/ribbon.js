@@ -79,10 +79,13 @@ export function refresh() {
   } else if (state.tab === 'insert') {
     const fresh = p?.newPhotos() || 0;
     panel = [
-      group('Add photos of slides, textbook pages or handwritten work', 'insert-photos',
+      group('Photos to turn into notes', 'insert-photos',
         big('🖼', 'Photos', 'Choose image files from this computer', () => p.choosePhotos(), { disabled: none }),
         big('📱', 'Phone camera', 'Show a QR code, then take pictures with your phone', () => p.phoneCamera(), { disabled: none }),
-        h('span', { class: 'rb-hint', text: 'or drag images in · paste with Ctrl+V' })),
+        h('span', { class: 'rb-hint', text: 'or drag in · Ctrl+V' })),
+      group('Pictures in your notes', 'insert-pictures',
+        big('🏞', 'Picture', 'Place an image in your notes. You can move it, resize it and draw on it', () => p.choosePicture(), { disabled: none }),
+        big('📎', 'Clippings', 'Diagrams found in your photos, plus clean versions redrawn by the AI, ready to drop into your notes', () => p.pics.toggleDock(), { disabled: none, badge: p?.page ? (p.pics.unused() || '') : '' })),
       group('Photos → notes', 'insert-generate',
         big('✨', 'Turn photos into notes', 'The AI reads the new photos on this page and writes organized notes', () => p.generate(false), { disabled: none || !fresh, badge: fresh || '', cls: fresh ? 'accent' : '' }),
         tb('↻ Rewrite all', 'Write the notes again from every photo on this page', () => p.generate(true), '', none || !p.page?.images.length ? { disabled: true } : {})),

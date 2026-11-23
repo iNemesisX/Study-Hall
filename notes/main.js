@@ -11,11 +11,12 @@ const fsp = fs.promises;
 const crypto = require('crypto');
 const ai = require('./ai');
 const capture = require('./capture');
+const usage = require('./usage');
 
 const MAX_EDGE = 2000;
 const PROVIDERS = ['gemini', 'ollama', 'claude'];
 const DEFAULTS = {
-  provider: 'gemini', detail: 'detailed',
+  provider: 'gemini', detail: 'detailed', autoDraw: true,
   gemini: { model: 'gemini-3.5-flash' },
   ollama: { url: 'http://localhost:11434', model: 'qwen3-vl:8b' },
   claude: { model: 'claude-sonnet-5-5' },
@@ -78,7 +79,7 @@ function decode(entry) {
 }
 async function loadSettings() {
   const raw = await readJson(settingsFile(), {});
-  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail };
+  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false };
   for (const p of PROVIDERS) s[p] = { ...DEFAULTS[p], ...(raw[p] || {}) };
   if (raw.apiKey && !s.claude.key) { // settings saved by StudyDeck 1.3 (Claude only)
     s.claude.key = raw.apiKey; s.claude.enc = !!raw.apiKeyEncrypted;
@@ -86,6 +87,7 @@ async function loadSettings() {
     if (!s.provider && decode(s.claude)) s.provider = 'claude';
   }
   s.provider ||= DEFAULTS.provider;
+  usage.setUserLimits({ gemini: +raw.gemini?.dailyLimit || 0, claude: +raw.claude?.dailyLimit || 0 });
   return s;
 }
 // Connection details for a provider; form values (not yet saved) win over saved ones.
@@ -132,9 +134,9 @@ function register(guarded) {
     const s = await loadSettings();
     const mock = !!process.env.STUDYHALL_MOCK;
     const out = {
-      provider: s.provider, detail: s.detail,
-      gemini: { model: s.gemini.model, hasKey: mock || !!decode(s.gemini) },
-      claude: { model: s.claude.model, hasKey: mock || !!decode(s.claude) },
+      provider: s.provider, detail: s.detail, autoDraw: s.autoDraw,
+      gemini: { model: s.gemini.model, hasKey: mock || !!decode(s.gemini), dailyLimit: +s.gemini.dailyLimit || 0 },
+      claude: { model: s.claude.model, hasKey: mock || !!decode(s.claude), dailyLimit: +s.claude.dailyLimit || 0 },
       ollama: { model: s.ollama.model, url: s.ollama.url },
     };
     out.ready = s.provider === 'ollama' || out[s.provider].hasKey;
@@ -142,19 +144,22 @@ function register(guarded) {
   });
   on('notes:settings:set', async (patch = {}) => {
     const s = await loadSettings();
-    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail };
+    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw };
     for (const p of PROVIDERS) {
       next[p] = { ...s[p] };
       const f = patch[p] || {};
       if (typeof f.model === 'string' && f.model.trim()) next[p].model = f.model.trim().slice(0, 100);
       if (p === 'ollama' && typeof f.url === 'string' && f.url.trim()) next[p].url = f.url.trim().replace(/\/+$/, '').slice(0, 200);
+      if (p !== 'ollama' && f.dailyLimit !== undefined) next[p].dailyLimit = Math.max(0, Math.min(100000, Math.round(+f.dailyLimit || 0)));
       if (p !== 'ollama' && typeof f.key === 'string') {
         if (f.key.trim()) Object.assign(next[p], encode(f.key.trim()));
         else if (f.clear) { delete next[p].key; delete next[p].enc; }
       }
     }
     await writeJson(settingsFile(), next);
+    await loadSettings(); // refreshes the usage limits
   });
+  on('notes:usage:get', async () => usage.status((await loadSettings()).provider));
   on('notes:ai:models', async ({ provider, form }) => ai.listModels(ctxFor(await loadSettings(), provider, form)));
   on('notes:ai:test', async ({ provider, form }) => ai.test(ctxFor(await loadSettings(), provider, form)));
 
@@ -191,7 +196,8 @@ function register(guarded) {
   });
   on('notes:page:delete', async (id, pageId) => {
     const page = await readJson(pageFile(id, pageId), null);
-    for (const img of page?.images || []) { try { await fsp.rm(imageFile(id, img.file), { force: true }); } catch { /* already gone */ } }
+    const files = [...(page?.images || []), ...(page?.topics || []).flatMap((t) => t.pics || [])].map((x) => x.file).filter(Boolean);
+    for (const f of files) { try { await fsp.rm(imageFile(id, f), { force: true }); } catch { /* already gone */ } }
     await fsp.rm(pageFile(id, pageId), { force: true });
   });
 
@@ -207,6 +213,13 @@ function register(guarded) {
     for (const f of files) images.push({ mediaType: 'image/jpeg', data: (await fsp.readFile(imageFile(id, f))).toString('base64') });
     return ai.generateNotes(ctx, { images, notebookName, pageTitle, existingHeadings });
   });
+  const readImages = async (id, files) => {
+    const images = [];
+    for (const f of files) images.push({ mediaType: 'image/jpeg', data: (await fsp.readFile(imageFile(id, f))).toString('base64') });
+    return images;
+  };
+  on('notes:ai:figures', async ({ id, files }) => ai.findFigures(await activeCtx(), { images: await readImages(id, files) }));
+  on('notes:ai:diagram', async ({ bytes, label, context }) => ai.drawDiagram(await activeCtx(), { image: { mediaType: 'image/jpeg', data: Buffer.from(bytes).toString('base64') }, label, context }));
   on('notes:ai:cards', async (args) => ai.generateCards(await activeCtx(), args));
   on('notes:ai:guide', async (args) => ai.generateGuide(await activeCtx(), args));
 

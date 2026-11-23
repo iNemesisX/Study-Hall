@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('studyhall', {
     getSettings: () => ipcRenderer.invoke('notes:settings:get'),
     setSettings: patch => ipcRenderer.invoke('notes:settings:set', patch),
     models: args => ipcRenderer.invoke('notes:ai:models', args),
+    usage: () => ipcRenderer.invoke('notes:usage:get'),
+    onUsage: fn => { ipcRenderer.on('notes:usage', () => fn()); },
     testAi: args => ipcRenderer.invoke('notes:ai:test', args),
     list: () => ipcRenderer.invoke('notes:list'),
     saveNotebook: nb => ipcRenderer.invoke('notes:nb:save', nb),
@@ -26,6 +28,8 @@ contextBridge.exposeInMainWorld('studyhall', {
     generate: args => ipcRenderer.invoke('notes:ai:notes', args),
     makeCards: args => ipcRenderer.invoke('notes:ai:cards', args),
     makeGuide: args => ipcRenderer.invoke('notes:ai:guide', args),
+    findFigures: args => ipcRenderer.invoke('notes:ai:figures', args),
+    drawDiagram: args => ipcRenderer.invoke('notes:ai:diagram', args),
     captureStart: id => ipcRenderer.invoke('notes:capture:start', id),
     captureStop: () => ipcRenderer.invoke('notes:capture:stop'),
     onCapture: fn => {

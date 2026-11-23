@@ -1,6 +1,6 @@
 // AI setup dialog and the shared "something went wrong" handling for AI actions.
 import * as nbstore from './nbstore.js';
-import { $, $$, esc, modal, toast, busy } from '../ui.js';
+import { $, $$, esc, modal, toast, busy, confirmDialog } from '../ui.js';
 
 const api = nbstore.api;
 export const PROVIDERS = {
@@ -11,6 +11,19 @@ export const PROVIDERS = {
 const listeners = new Set();
 export const onAiChange = fn => listeners.add(fn);
 export const getSettings = () => (api ? api.getSettings() : Promise.resolve({ ready: false, provider: 'gemini' }));
+
+export const getUsage = () => (api ? api.usage().catch(() => null) : Promise.resolve(null));
+
+/** Before an action that needs several AI requests: warn when today's allowance may not cover it. */
+export async function checkBudget(needed) {
+  const u = await getUsage();
+  if (!u || !u.limit || u.left >= needed) return true;
+  const name = PROVIDERS[u.provider]?.name || 'AI';
+  if (u.left <= 0) {
+    return confirmDialog('Today\'s AI limit looks used up', `You've used ${u.count} of ${u.source === 'estimate' ? 'about ' : ''}${u.limit} ${name} requests today, so this will probably fail. The limit resets in about ${Math.ceil(u.hoursToReset)} hours. Try anyway?`, 'Try anyway', 'primary');
+  }
+  return confirmDialog('This may use up today\'s AI limit', `This needs about ${needed} AI requests and you have ${u.source === 'estimate' ? 'about ' : ''}${u.left} left today with ${name}. It may stop part-way. Continue?`, 'Continue', 'primary');
+}
 
 export const errText = e => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
@@ -35,7 +48,8 @@ export async function aiSettingsDialog(note) {
   let provider = s.provider;
   const form = p => {
     const el = $(`[data-p="${p}"]`);
-    return { key: $('[data-f="key"]', el)?.value.trim() || '', model: $('[data-f="model"]', el).value.trim(), url: $('[data-f="url"]', el)?.value.trim() || '' };
+    const lim = $('[data-f="limit"]', el);
+    return { key: $('[data-f="key"]', el)?.value.trim() || '', model: $('[data-f="model"]', el).value.trim(), url: $('[data-f="url"]', el)?.value.trim() || '', ...(lim ? { dailyLimit: +lim.value || 0 } : {}) };
   };
   const keyField = (p, placeholder) => `<label class="select-wrap">API key<input class="input" type="password" data-f="key" autocomplete="off"
     placeholder="${s[p].hasKey ? 'A key is saved. Type a new one to replace it.' : placeholder}"></label>`;
@@ -55,6 +69,8 @@ export async function aiSettingsDialog(note) {
         <ol class="steps"><li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with a Google account.</li>
           <li>Click <b>Create API key</b> and copy it.</li><li>Paste it below and press <b>Save</b>.</li></ol>
         ${keyField('gemini', 'Paste your Gemini key')}${modelField('gemini')}
+        <label class="select-wrap">Daily request limit for the usage alert (leave empty to detect it automatically)
+          <input class="input" type="number" min="0" data-f="limit" value="${s.gemini.dailyLimit || ''}" placeholder="Automatic. Your real limits are listed at aistudio.google.com/rate-limit"></label>
         <p class="muted small">Free, with daily limits that reset at midnight Pacific time. On the free tier, Google may use what you send to improve its products, so don't photograph anything private.</p>
       </div>
       <div class="ai-panel" data-p="ollama">
@@ -66,11 +82,15 @@ export async function aiSettingsDialog(note) {
       <div class="ai-panel" data-p="claude">
         <ol class="steps"><li>Create a key at <a href="https://console.anthropic.com" target="_blank" rel="noopener">console.anthropic.com</a> (needs a payment method).</li><li>Paste it below and press <b>Save</b>.</li></ol>
         ${keyField('claude', 'sk-ant-…')}${modelField('claude')}
+        <label class="select-wrap">Daily request budget for the usage alert (optional)
+          <input class="input" type="number" min="0" data-f="limit" value="${s.claude.dailyLimit || ''}" placeholder="e.g. 50. Leave empty for no alert"></label>
         <p class="muted small">The most accurate notes, especially from handwriting and dense slides. Billed to your Anthropic account for each use.</p>
       </div>
       <label class="select-wrap" style="margin-top:12px">How detailed should notes be?<select class="input" data-f="detail">
         ${[['concise', 'Concise: key ideas only'], ['detailed', 'Detailed: learn it from the notes'], ['exhaustive', 'Exhaustive: everything on the page']]
           .map(([v, t]) => `<option value="${v}" ${s.detail === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="opt-row" style="margin-top:10px"><span>Draw clean versions of diagrams<br><span class="muted small">When photos contain diagrams, the AI also redraws each one as an editable diagram. Uses one extra AI request per diagram.</span></span>
+        <input type="checkbox" class="switch" data-f="autodraw" ${s.autoDraw ? 'checked' : ''}></label>
       <p class="ai-status" data-status></p>`,
     onMount: (el, close) => {
       const show = () => {
@@ -103,7 +123,7 @@ export async function aiSettingsDialog(note) {
       } },
       { label: 'Cancel', kind: 'ghost' },
       { label: 'Save', kind: 'primary', onClick: async el => {
-        const patch = { provider, detail: $('[data-f="detail"]', el).value };
+        const patch = { provider, detail: $('[data-f="detail"]', el).value, autoDraw: $('[data-f="autodraw"]', el).checked };
         for (const p of Object.keys(PROVIDERS)) patch[p] = form(p);
         await api.setSettings(patch);
         listeners.forEach(fn => fn());

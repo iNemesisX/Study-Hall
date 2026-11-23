@@ -2,7 +2,7 @@
 import * as store from '../store.js';
 import * as nbstore from '../notes/nbstore.js';
 import { $, h, menu, confirmDialog, promptDialog, toast } from '../ui.js';
-import { getSettings, PROVIDERS, aiSettingsDialog } from '../notes/aiui.js';
+import { getSettings, getUsage, PROVIDERS, aiSettingsDialog } from '../notes/aiui.js';
 import { faqDialog } from './help.js';
 
 /** Which notebook / section / page a #/hash route refers to. */
@@ -126,18 +126,44 @@ export function renderNav(hash) {
         current ? h('button', { class: 'nav-add', text: '＋ Add page', 'data-tour': 'add-page', onclick: () => newPage(nb, current) }) : null)));
 }
 
-let aiLabel = { text: 'AI…', ready: true };
+let aiLabel = { text: 'AI…', ready: true, level: 'ok' };
 export async function refreshAi() {
   const s = await getSettings();
-  aiLabel = s.ready ? { text: `AI: ${PROVIDERS[s.provider].short}`, ready: true } : { text: 'Set up free AI', ready: false };
+  const u = s.ready ? await getUsage() : null;
+  const used = u && u.limit ? ` · ${u.count}/${u.limit} today` : '';
+  aiLabel = s.ready ? { text: `AI: ${PROVIDERS[s.provider].short}${used}`, ready: true, level: u?.level || 'ok' } : { text: 'Set up free AI', ready: false, level: 'ok' };
   renderAppbar();
+  usageBanner(u);
+}
+
+// A bar under the ribbon when today's AI allowance is nearly or fully used.
+function usageBanner(u) {
+  const bar = $('#usagebar');
+  if (!bar) return;
+  const key = u && `${u.provider}:${u.level}:${new Date().toDateString()}`;
+  let dismissed = null;
+  try { dismissed = localStorage.getItem('studyhall-usage-dismissed'); } catch { /* ignore */ }
+  if (!u || !['warn', 'high', 'max'].includes(u.level) || dismissed === key) { bar.hidden = true; return; }
+  const name = PROVIDERS[u.provider].name, about = u.source === 'estimate' ? 'about ' : '';
+  const reset = `It resets in about ${Math.max(1, Math.ceil(u.hoursToReset))} hour${Math.ceil(u.hoursToReset) > 1 ? 's' : ''}${u.provider === 'gemini' ? ' (midnight Pacific time)' : ''}.`;
+  const msg = u.level === 'max' ? `Today's ${name} limit is used up (${u.count} of ${about}${u.limit} requests). ${reset}`
+    : `${u.level === 'high' ? 'Almost out: you' : 'You'}'ve used ${u.count} of ${about}${u.limit} ${name} requests for today. ${u.left} left. ${reset}`;
+  bar.className = u.level;
+  bar.hidden = false;
+  bar.replaceChildren(
+    h('span', { class: 'usage-ico', text: u.level === 'max' ? '⛔' : '⚠' }),
+    h('span', { class: 'usage-msg', text: msg }),
+    h('span', { class: 'muted small', text: u.level === 'max' ? 'Typing, drawing and studying still work.' : 'Each "turn into notes", flashcard set, study guide or diagram uses requests.' }),
+    h('span', { class: 'spacer' }),
+    h('button', { class: 'btn small', text: 'Switch AI', title: 'Use another model or AI option', onclick: () => aiSettingsDialog() }),
+    h('button', { class: 'btn small ghost', text: 'Dismiss', onclick: () => { try { localStorage.setItem('studyhall-usage-dismissed', key); } catch { /* ignore */ } bar.hidden = true; } }));
 }
 export function renderAppbar() {
   const theme = store.db().settings.theme;
   $('#appbar').replaceChildren(
     h('a', { class: 'logo', href: '#/' }, h('img', { src: 'icon.png', alt: '' }), h('span', { text: 'Study Hall' })),
     h('span', { class: 'spacer' }),
-    h('button', { class: `ai-chip ${aiLabel.ready ? '' : 'todo'}`, 'data-tour': 'ai', title: 'Choose which AI writes your notes', text: aiLabel.text, onclick: () => aiSettingsDialog() }),
+    h('button', { class: `ai-chip ${aiLabel.ready ? '' : 'todo'} ${aiLabel.level}`, 'data-tour': 'ai', title: 'Choose which AI writes your notes', text: aiLabel.text, onclick: () => aiSettingsDialog() }),
     h('button', { class: 'bar-btn', title: 'Help and FAQ', text: '?', 'data-tour': 'help-btn', onclick: () => faqDialog() }),
     h('button', { class: 'bar-btn', title: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', text: theme === 'dark' ? '☀' : '☾',
       onclick: () => { const t = theme === 'dark' ? 'light' : 'dark'; store.setTheme(t); document.body.dataset.theme = t; renderAppbar(); } }));

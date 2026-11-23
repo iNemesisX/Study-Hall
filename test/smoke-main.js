@@ -29,7 +29,8 @@ const fake = http.createServer((req, res) => {
     const j = body ? JSON.parse(body) : {};
     const send = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     const doc = { title: 'T', sections: [{ heading: 'H', summary: 's', blocks: [{ type: 'paragraph', text: 'from ' + req.url.split('/')[1] }] }] };
-    if (req.url.startsWith('/gemini/models/limited')) return send(429, { error: { message: 'quota' } });
+    if (req.url.startsWith('/gemini/models/limited')) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] }] } });
+    if (req.url.startsWith('/gemini/models/busy')) { seen.busy = (seen.busy || 0) + 1; if (seen.busy === 1) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }, { retryDelay: '1s' }] } }); }
     if (req.url.startsWith('/gemini/models?')) return send(200, { models: [{ name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-x-tts', supportedGenerationMethods: ['generateContent'] }] });
     if (req.url.startsWith('/gemini/')) {
       seen.gemini = { url: req.url, key: req.headers['x-goog-api-key'], img: j.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/jpeg'), schema: !!j.generationConfig.responseJsonSchema, sys: !!j.systemInstruction };
@@ -97,6 +98,9 @@ async function run(base) {
     await clickText('.page-item', 'Sample notes'); await sleep(900);
     check('doing the action advances the tour', (await tip()).includes('what Study Hall writes'));
     await shot('03-tour-notes');
+    await nextBtn(); await sleep(700);
+    check('tour shows pictures and diagrams on the sample page', (await tip()).includes('Pictures and diagrams') && await js(`return !!document.querySelector('.pg-pic.diagram') && document.querySelectorAll('.pg-pic.diagram .dg-label').length === 10`));
+    await shot('03b-tour-pictures');
     await nextBtn(); await sleep(300);
     await js(`document.querySelector('[data-tab="insert"]').click();`); await sleep(500);
     check('Insert tab step', (await tip()).includes('Three ways'));
@@ -151,7 +155,7 @@ async function run(base) {
       const nb = (await import('./js/notes/nbstore.js')).list().find(n => n.sample); const m = await import('./js/store.js');
       return nb.sections.length === 2 && nb.sections[0].pages.length === 3 && nb.sections[1].pages[0].kind === 'guide' && m.setsForNotebook(nb.id).length === 1`));
     await js(`document.querySelector('[data-tab="help"]').click();`); await clickText('.rb.big', 'Feature guide'); await sleep(300);
-    check('feature guide lists every feature', await js(`return document.querySelectorAll('.modal .feature').length === 11`));
+    check('feature guide lists every feature', await js(`return document.querySelectorAll('.modal .feature').length === 12`));
     await shot('08-feature-guide');
     await js(`document.querySelector('.modal [data-close]').click();`);
 
@@ -191,10 +195,36 @@ async function run(base) {
     check('Claude: request shape and reply handled', c.sections[0].blocks[0].text === 'from claude' && seen.claude.key === 'ck' && seen.claude.tool === 'save_notes' && seen.claude.img);
     const msg = async fn => { try { await fn(); return ''; } catch (e) { return e.message; } };
     check('Gemini free-limit error is explained', (await msg(() => ai.generateNotes({ provider: 'gemini', apiKey: 'k', model: 'limited' }, args))).includes('free Gemini limit'));
+    const usage = require('../notes/usage.js');
+    check('daily limit is learned from Gemini\'s own error', usage.status('gemini').limit === 20 && usage.status('gemini').level === 'max' && usage.status('gemini').source === 'reported');
+    const before = usage.status('gemini').count;
+    const waited = await ai.generateNotes({ provider: 'gemini', apiKey: 'k', model: 'busy', detail: 'detailed' }, args);
+    check('per-minute limit waits and retries once', waited.sections.length === 1 && seen.busy === 2 && usage.status('gemini').count === before + 2);
+    const fd = await ai.drawDiagram({ provider: 'gemini', apiKey: 'gk', model: 'gemini-3.5-flash' }, { image: img, label: 'x' }).catch(e => e.message);
+    check('a diagram reply without shapes is rejected', String(fd).includes('empty'));
     check('Ollama missing model tells you the pull command', (await msg(() => ai.generateNotes({ provider: 'ollama', url: `${base}/ollama`, model: 'missing' }, args))).includes('ollama pull missing'));
     check('Ollama not running is explained', (await msg(() => ai.generateNotes({ provider: 'ollama', url: 'http://127.0.0.1:9', model: 'm' }, args))).includes('Install it from ollama.com'));
     check('model lists load', (await ai.listModels({ provider: 'gemini', apiKey: 'k' })).join() === 'gemini-3.5-flash' && (await ai.listModels({ provider: 'ollama', url: `${base}/ollama` })).join() === 'qwen3-vl:8b');
     process.env.STUDYHALL_MOCK = '1';
+
+    /* ---- usage alerts ---- */
+    await js(`await window.studyhall.notes.setSettings({ provider: 'gemini' }); document.querySelector('[data-tab="home"]').click();`);
+    await js(`(await import('./js/views/nav.js')).refreshAi(); await new Promise(r => setTimeout(r, 400));`);
+    check('used-up limit shows a red bar and count on the AI button', await js(`const b = document.querySelector('#usagebar'); return !b.hidden && b.classList.contains('max') && b.textContent.includes('used up') && /\\d+\\/20 today/.test(document.querySelector('.ai-chip').textContent) && document.querySelector('.ai-chip').classList.contains('max')`));
+    await shot('09b-usage-max');
+    await js(`await window.studyhall.notes.setSettings({ provider: 'claude', claude: { dailyLimit: 4 } }); (await import('./js/views/nav.js')).refreshAi(); await new Promise(r => setTimeout(r, 300));`);
+    check('no warning while usage is low', await js(`return document.querySelector('#usagebar').hidden && document.querySelector('.ai-chip').textContent.includes('1/4 today')`));
+    await js(`await window.studyhall.notes.makeCards({ notes: 'x', count: 3 }); await window.studyhall.notes.makeCards({ notes: 'x', count: 3 }); await new Promise(r => setTimeout(r, 500));`);
+    check('warning bar appears at 75% of the daily limit', await js(`const b = document.querySelector('#usagebar'); return !b.hidden && b.classList.contains('warn') && b.textContent.includes('3 of 4') && b.textContent.includes('1 left')`));
+    await shot('09c-usage-warn');
+    check('multi-request actions ask first when the allowance is short', await js(`const m = await import('./js/notes/aiui.js'); const p = m.checkBudget(3); await new Promise(r => setTimeout(r, 200));
+      const shown = document.querySelector('.modal h2').textContent.includes('use up'); document.querySelector('.modal [data-action="0"]').click(); return shown && (await p) === false`));
+    await js(`[...document.querySelectorAll('#usagebar button')].find(b => b.textContent === 'Dismiss').click();`);
+    check('dismissing hides the bar until the next level', await js(`return document.querySelector('#usagebar').hidden`));
+    await js(`await window.studyhall.notes.makeCards({ notes: 'x', count: 3 }); await new Promise(r => setTimeout(r, 500));`);
+    check('it comes back when the limit is reached', await js(`const b = document.querySelector('#usagebar'); return !b.hidden && b.classList.contains('max')`));
+    await js(`await window.studyhall.notes.setSettings({ provider: 'ollama' }); (await import('./js/views/nav.js')).refreshAi(); await new Promise(r => setTimeout(r, 300));`);
+    check('no limit warnings for the local AI', await js(`return document.querySelector('#usagebar').hidden`));
 
     /* ---- make a class notebook, add photos, get notes ---- */
     await js(`document.querySelector('.nb-picker').click();`); await sleep(150);
@@ -221,6 +251,49 @@ async function run(base) {
     await clickText('.rb.big', 'Turn photos into notes'); await sleep(1200);
     check('notes written into topics, page titled, photos marked used', await js(`return document.querySelectorAll('.pg-topic').length === 2 && ${PG}.page.title === 'Newtonian Mechanics' && ${PG}.newPhotos() === 0 && document.querySelectorAll('.pg-text .katex').length >= 3`));
     check('page title shows in the page list', await js(`return document.querySelector('.page-item.on').textContent.includes('Newtonian Mechanics')`));
+
+    /* ---- clippings, pictures and AI diagrams ---- */
+    check('diagram found in the photos is offered in Clippings, with a clean redraw', await js(`const c = ${PG}.page.clips; return c.length === 2 && c[0].src && c[1].kind === 'diagram' && document.querySelectorAll('.clip-dock.open .clip').length === 2 && document.querySelector('.clip.drawn svg.clip-thumb') !== null`));
+    await shot('11b-clippings');
+    await js(`document.querySelector('.clip:not(.drawn) .btn.primary').click(); await new Promise(r => setTimeout(r, 900));`);
+    check('Place puts the cut-out under its section as a picture', await js(`const t = ${PG}.page.topics[0]; const p = t.pics[0]; const el = document.querySelector('.pg-pic img'); return t.pics.length === 1 && !!p.file && p.y > 50 && Math.abs(p.r - 0.5) < 0.2 && !!el && ${PG}.page.clips[0].used`));
+    await js(`const paper = document.querySelector('.pg-paper'); const t = document.querySelectorAll('.pg-topic')[1].getBoundingClientRect();
+      const dt = new DataTransfer(); dt.setData('application/x-studyhall-clip', ${PG}.page.clips[1].id);
+      paper.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: t.left + 400, clientY: t.top + 200 })); await new Promise(r => setTimeout(r, 700));`);
+    check('dragging the clean diagram into the notes places it at the drop point', await js(`const p = ${PG}.page.topics[1].pics[0]; return p.kind === 'diagram' && Math.abs(p.x + p.w / 2 - 400) < 3 && document.querySelectorAll('.pg-pic.diagram .dg-label').length === 3`));
+    check('AI-drawn SVG is stripped of scripts and handlers', await js(`const a = document.querySelector('.pg-pic.diagram .dg-art'); return !a.querySelector('script') && !a.innerHTML.includes('onclick') && a.querySelectorAll('rect').length === 2 && a.querySelectorAll('polygon').length === 1`));
+    const drag = (sel, dx, dy) => js(`const el = document.querySelector('${sel}'); const r = el.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      const ev = (t, X, Y) => el.dispatchEvent(new PointerEvent(t, { clientX: X, clientY: Y, pointerId: 21, bubbles: true, button: 0, pointerType: 'mouse' }));
+      ev('pointerdown', x, y); ev('pointermove', x + ${dx} / 2, y + ${dy} / 2); ev('pointermove', x + ${dx}, y + ${dy}); ev('pointerup', x + ${dx}, y + ${dy}); await new Promise(r => setTimeout(r, 250));`);
+    const d0 = await js(`const p = ${PG}.page.topics[1].pics[0]; return [p.x, p.y, p.w]`);
+    await drag('.pg-pic.diagram', -60, 30);
+    check('a picture can be dragged to a new position', await js(`const p = ${PG}.page.topics[1].pics[0]; return p.x === ${d0[0]} - 60 && p.y === ${d0[1]} + 30 && document.querySelector('.pg-pic.diagram').classList.contains('sel')`));
+    await drag('.pg-pic.diagram .pic-handle', -80, 0);
+    check('dragging the corner resizes it', await js(`return ${PG}.page.topics[1].pics[0].w === ${d0[2]} - 80`));
+    await js(`const l = document.querySelector('.pg-pic.diagram .dg-label'); l.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); l.textContent = 'Mass (kg)'; l.blur(); await new Promise(r => setTimeout(r, 100));`);
+    check('diagram labels can be edited', await js(`return ${PG}.page.topics[1].pics[0].diagram.labels[0].text === 'Mass (kg)' && document.querySelector('.pg-pic.diagram .dg-label').textContent === 'Mass (kg)'`));
+    const l0 = await js(`return ${PG}.page.topics[1].pics[0].diagram.labels[0].x`);
+    await drag('.pg-pic.diagram .dg-label', 40, 0);
+    check('diagram labels can be moved, and added', await js(`const d = ${PG}.page.topics[1].pics[0].diagram; const moved = d.labels[0].x > ${l0} + 30; [...document.querySelectorAll('.pg-pic.diagram .pic-bar button')].find(b => b.textContent.includes('Label')).click(); return moved && d.labels.length === 4`));
+    await js(`[...document.querySelectorAll('.pg-pic.diagram .pic-bar button')].find(b => b.textContent.includes('Draw on it')).click(); await new Promise(r => setTimeout(r, 200));
+      const svg = document.querySelector('.pg-pic.diagram svg.pic-ink'); const b = svg.getBoundingClientRect();
+      const ev = (t, x, y) => svg.dispatchEvent(new PointerEvent(t, { clientX: b.left + x, clientY: b.top + y, pointerId: 22, bubbles: true, button: 0, pointerType: 'mouse' }));
+      ev('pointerdown', 30, 30); for (let i = 1; i < 15; i++) ev('pointermove', 30 + i * 8, 30 + i * 3); ev('pointerup', 150, 75);`);
+    check('drawing on a picture stores ink with that picture', await js(`return ${PG}.getMode() !== 'text' && ${PG}.page.topics[1].pics[0].ink.length === 1 && ${PG}.page.topics[1].ink.length === 0`));
+    await shot('11c-pictures');
+    await js(`document.querySelector('[data-tab="home"]').click();
+      const c = document.createElement('canvas'); c.width = 500; c.height = 300; c.getContext('2d').fillRect(0, 0, 500, 300);
+      const b = await new Promise(r => c.toBlob(r, 'image/png')); await ${PG}.pics.insertFiles([new File([b], 'own.png', { type: 'image/png' })], null);`);
+    check('an image file can be placed as a standalone picture', await js(`return ${PG}.pics.count() === 3 && ${PG}.page.images.length === 2`));
+    await js(`${PG}.pics.addManualClip(${PG}.page.images[0].file, { x: 0.1, y: 0.1, w: 0.3, h: 0.3 });`);
+    check('clipping part of a photo by hand adds it to Clippings', await js(`return ${PG}.page.clips.length === 3 && document.querySelectorAll('.clip').length === 3`));
+    await js(`const drop = new DataTransfer(); const c = document.createElement('canvas'); c.width = 80; c.height = 80; const b = await new Promise(r => c.toBlob(r, 'image/png')); drop.items.add(new File([b], 'd.png', { type: 'image/png' }));
+      document.querySelector('.pg-root').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: drop, clientX: 700, clientY: 500 })); await new Promise(r => setTimeout(r, 200));`);
+    check('dropping an image on notes asks: picture or photo for notes', await js(`const t = document.querySelector('.menu')?.textContent || ''; document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })); return t.includes('as a picture') && t.includes('turn into notes')`));
+    const picId = await js(`const all = ${PG}.page.topics.flatMap(t => t.pics || []); return all[all.length - 1].id`);
+    await js(`await ${PG}.pics.removePic('${picId}');`);
+    check('pictures can be deleted', await js(`return ${PG}.pics.count() === 2`));
+    await js(`document.querySelector('.clip-head .icon-btn').click(); document.querySelector('.pg-scroll').scrollTop = 0;`);
 
     /* ---- annotate ---- */
     await js(`document.querySelector('[data-tab="home"]').click();
@@ -317,7 +390,7 @@ async function run(base) {
 
     /* ---- reopen, dark theme ---- */
     await js(`location.hash = '#/nb/${nbId}/p/${pageId}';`); await sleep(800);
-    check('reopening restores notes, ink and comment', await js(`return document.querySelectorAll('.pg-topic svg.pg-ink path').length === 5 && document.querySelectorAll('.pg-cmt').length === 1`));
+    check('reopening restores notes, ink and comment', await js(`return document.querySelectorAll('.pg-topic > svg.pg-ink path').length === 5 && document.querySelectorAll('.pg-cmt').length === 1 && document.querySelectorAll('.pg-pic').length === 2 && document.querySelectorAll('.pg-pic svg.pic-ink path').length === 1 && document.querySelector('.pg-pic.diagram .dg-label').textContent === 'Mass (kg)'`));
     await js(`document.querySelector('#appbar .bar-btn:last-child').click();`);
     await shot('17-dark-theme');
     await js(`document.querySelector('#appbar .bar-btn:last-child').click(); location.hash = '#/nb/oldnb1';`); await sleep(800);

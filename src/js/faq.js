@@ -105,7 +105,16 @@ export const FAQ = [
         id: 'limit', q: 'It says "The free Gemini limit was reached".',
         a: [
           'The free tier allows a limited number of requests per minute and per day. Wait a minute and try again. If it keeps happening, you have used the day\'s allowance; it resets at midnight Pacific time.',
-          'To use less: turn photos into notes a handful at a time rather than one by one, or switch to Ollama or Claude in AI setup.',
+          'To use less: turn photos into notes a handful at a time rather than one by one, turn off **Draw clean versions of diagrams** in AI setup, or switch to another model, Ollama or Claude.',
+        ],
+      },
+      {
+        id: 'usage', q: 'How do I know when I\'m close to my AI limit?',
+        a: [
+          'The **AI** button at the top right shows how many requests you have used today, for example "12/20 today". It turns yellow when you pass three quarters of the limit, and a warning bar appears under the toolbar with how many requests are left and when the limit resets. A second warning appears at 90%, and a red one when the limit is used up.',
+          'Before an action that needs several requests, Study Hall also checks what is left and asks before continuing if it might not be enough.',
+          'Google does not tell apps how much of the free allowance is left, so Study Hall counts its own requests. It starts from an estimate of 20 a day for free Gemini Flash models and corrects it from Google\'s own message the first time a limit is reached. Your real limits are listed at [aistudio.google.com/rate-limit](https://aistudio.google.com/rate-limit); you can type the number into **AI setup → Daily request limit** to make the warning exact. For Claude, set a daily budget in AI setup to get the same warnings.',
+          { tip: 'Requests made with the same key in other apps are not counted, and limits are per model, so switching model in AI setup gives you that model\'s separate allowance.' },
         ],
       },
     ],
@@ -141,6 +150,25 @@ export const FAQ = [
             'Use **Insert → Rewrite all** to write the page again from its photos.',
             'For handwriting, Claude is the most accurate option.',
           ] },
+        ],
+      },
+      {
+        id: 'pictures', q: 'How do I add a picture or diagram to my notes?',
+        a: [
+          { steps: [
+            'Go to **Insert → Picture** and choose an image. Or drag an image onto your notes (or paste one) and choose **Place in my notes as a picture**.',
+            'Click the picture to select it. Drag it to move it; drag the round handle at its corner to resize it.',
+            'To write on it, click **Draw on it** (or open the Draw tab) and draw. The ink stays attached when you move the picture.',
+            'Press **Delete**, or the bin button above the picture, to remove it.',
+          ] },
+        ],
+      },
+      {
+        id: 'clippings', q: 'What are Clippings and clean diagrams?',
+        a: [
+          'When you turn photos into notes, the AI also looks for diagrams, charts and drawings in them. Each one appears in the **Clippings** tray at the bottom right of the page. Drag a clipping into your notes, or press **Place** to put it under its section.',
+          'Photos are often blurry or skewed, so the AI can also **redraw** a diagram cleanly. A clean diagram is a drawing plus separate labels: double-click a label to edit it, drag labels and their pointer dots to move them, and use **＋ Label** to add your own. The first two diagrams are redrawn automatically; press **Redraw** on any other clipping. Each redraw uses one AI request.',
+          'Clean diagrams are simplified schematics drawn by the AI, so check them against the original, especially labels and arrows. To cut out part of a photo yourself, click the photo and choose **Clip a picture**, then drag a box around what you want.',
         ],
       },
       {

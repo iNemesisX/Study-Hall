@@ -30,6 +30,8 @@ code-signed, so Windows SmartScreen warns on first run ("More info" → "Run any
 - **Left:** notebook picker (one notebook per class), then sections and pages side by side.
 - **Ribbon:** Home (font, format, highlight, comment, PDF) · Insert (photos, phone camera, turn photos into notes) ·
   Draw (pens, eraser, undo) · Study (flashcards: generate from notes, type by hand, or import from Quizlet; practice test; study guide) · Help (tour, feature guide, AI setup, backup).
+- **Pictures and Clippings:** standalone images in notes that can be moved, resized and drawn on. Diagrams found in photos are offered in a Clippings tray, as cut-outs and as clean, editable diagrams redrawn by the AI.
+- **Usage alerts:** the AI button shows requests used today; a warning bar appears at 75% and 90% of the daily limit and when it is used up.
 - **Guided tour:** plays every time the app opens (untick "Show this tour every time Study Hall opens", or use Help → Tour at startup, to stop it). It has three parts: Notes; Flashcards and studying; Setup and help. Users click through a sample class and can jump straight to any part.
 - **FAQ:** Help → FAQ, or the ? button. Searchable, with step-by-step instructions for getting and connecting a Gemini, Claude or Ollama API key. The same text is in [docs/FAQ.md](docs/FAQ.md).
 
@@ -52,7 +54,9 @@ without editing code. Defaults are in `notes/main.js` (`DEFAULTS`).
 | --- | --- |
 | `main.js`, `preload.js` | Window, flashcard data file, one-time copy of old StudyDeck data |
 | `notes/main.js` | Notebook / page / photo storage, AI settings, PDF export |
-| `notes/ai.js` | Gemini, Ollama and Claude requests; prompts for notes, flashcards and study guides |
+| `notes/ai.js` | Gemini, Ollama and Claude requests; prompts for notes, figures, clean diagrams, flashcards and study guides |
+| `notes/usage.js` | Counts AI requests per day and learns the provider's daily limit |
+| `src/js/notes/pics.js` | Pictures in notes, AI diagrams with editable labels, the Clippings tray |
 | `notes/capture.js` | QR code and the phone upload server |
 | `src/js/app.js` | Routes and start-up |
 | `src/js/views/nav.js`, `ribbon.js` | Navigation pane, app bar, ribbon |

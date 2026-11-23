@@ -2,11 +2,12 @@
 // text + ink annotation. The ribbon (ribbon.js) drives it through `ctrl`.
 import * as nbstore from '../notes/nbstore.js';
 import * as ribbon from './ribbon.js';
-import { $, $$, esc, uid, h, plural, modal, confirmDialog, toast, busy } from '../ui.js';
+import { $, $$, esc, uid, h, plural, modal, menu, confirmDialog, toast, busy } from '../ui.js';
 import { sectionHtml } from '../notes/render.js';
 import { Ink, InkHistory } from '../notes/ink.js';
 import { prefs, toolSpec, inkBar } from '../notes/inkbar.js';
-import { fail, errText, ensureAi, getSettings } from '../notes/aiui.js';
+import { fail, errText, ensureAi, getSettings, checkBudget } from '../notes/aiui.js';
+import { createPics } from '../notes/pics.js';
 import { notFound } from './common.js';
 
 const api = nbstore.api;
@@ -29,8 +30,9 @@ export function pageView(root, nbId, pageId) {
 
   /* ----- saving ----- */
   function save() { dirty = true; clearTimeout(timer); timer = setTimeout(flush, 500); }
-  async function flush() {
+  async function flush(force) {
     clearTimeout(timer);
+    if (force) dirty = true;
     if (!page || !dirty) return;
     dirty = false;
     try { await nbstore.savePage(nb, page); } catch (e) { dirty = true; toast(errText(e)); }
@@ -48,15 +50,30 @@ export function pageView(root, nbId, pageId) {
   document.addEventListener('keydown', onKeys);
   const onDocDown = e => { if (pop && !pop.contains(e.target)) closePop(); };
   document.addEventListener('mousedown', onDocDown);
+  // An image dropped or pasted onto existing notes could be meant either way, so ask.
+  function offerImages(files, x, y) {
+    const imgs = [...files].filter(f => f.type.startsWith('image/') || /\.(heic|heif)$/i.test(f.name));
+    if (!imgs.length || !page) return;
+    if (!page.topics.length) return addFiles(imgs);
+    const at = pics.pointOn(x, y);
+    menu({ getBoundingClientRect: () => ({ left: x, right: x, top: y, bottom: y }) }, [
+      { head: plural(imgs.length, 'image') },
+      { label: 'Place in my notes as a picture', icon: '🖼', onClick: () => pics.insertFiles(imgs, at) },
+      { label: 'Add as a photo to turn into notes', icon: '✨', onClick: () => addFiles(imgs) },
+    ]);
+  }
   const onPaste = e => {
     if (!page || $('.modal-backdrop')) return;
     const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
-    if (files.length) { e.preventDefault(); addFiles(files); }
+    if (!files.length) return;
+    e.preventDefault();
+    const r = (scroller || root).getBoundingClientRect();
+    offerImages(files, r.left + r.width / 2 - 120, r.top + r.height / 3);
   };
   document.addEventListener('paste', onPaste);
   root.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); root.classList.add('dropping'); } });
   root.addEventListener('dragleave', e => { if (e.target === root || !root.contains(e.relatedTarget)) root.classList.remove('dropping'); });
-  root.addEventListener('drop', e => { root.classList.remove('dropping'); if (e.dataTransfer?.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+  root.addEventListener('drop', e => { root.classList.remove('dropping'); if (e.dataTransfer?.files.length) { e.preventDefault(); offerImages(e.dataTransfer.files, e.clientX, e.clientY); } });
 
   const offCapture = api.onCapture(({ id, image }) => {
     if (disposed || !page || id !== nb.id) return;
@@ -123,6 +140,14 @@ export function pageView(root, nbId, pageId) {
   }
   const exec = (cmd, value) => inText(() => { document.execCommand('styleWithCSS', false, true); document.execCommand(cmd, false, value); });
 
+  const picPicker = h('input', { type: 'file', accept: 'image/*', multiple: true, hidden: true, onchange: e => { pics.insertFiles(e.target.files, null); e.target.value = ''; } });
+  const pics = createPics({
+    nb, page: () => page, paper: () => paper, scroller: () => scroller, root, mode: () => mode, history,
+    drawMode: () => { ribbon.setTab('draw'); setMode(prefs.tool); },
+    save, flush, imageUrl, lazyImg, downscale, render: () => render(), ribbonRefresh: () => ribbon.refresh(),
+    newTopic: () => { const t = { id: uid(), heading: '', html: '<p><br></p>', ink: [], pics: [] }; page.topics.push(t); return t; },
+  });
+
   nbstore.loadPage(nbId, pageId).then(loaded => {
     if (disposed) return;
     if (!loaded) { root.className = ''; return notFound(root, 'page'); }
@@ -136,6 +161,7 @@ export function pageView(root, nbId, pageId) {
   function render() {
     closePop();
     inks.clear();
+    pics.reset();
     const keep = scroller?.scrollTop || 0;
     const fresh = page.images.filter(i => !i.processed).length;
     paper = h('article', { class: `pg-paper ${mode !== 'text' ? 'inking' : ''}`, 'data-tour': 'paper' },
@@ -150,7 +176,10 @@ export function pageView(root, nbId, pageId) {
       page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere());
     applyPageFont();
     scroller = h('div', { class: 'pg-scroll' }, paper);
-    root.replaceChildren(scroller, picker);
+    root.replaceChildren(scroller, picker, picPicker, pics.dock());
+    page.topics.forEach(t => pics.mount(t, $(`.pg-topic[data-id="${t.id}"]`, paper)));
+    pics.layout();
+    pics.bindPaper(paper);
     page.topics.forEach(t => {
       const svg = $(`.pg-topic[data-id="${t.id}"] svg`, paper);
       inks.set(t.id, new Ink(svg, t.ink, { getTool: toolSpec(() => mode), onCommit: op => history.push(op), scroller }));
@@ -159,11 +188,12 @@ export function pageView(root, nbId, pageId) {
     paper.addEventListener('pointerdown', e => {
       if (e.pointerType !== 'pen' || mode !== 'text' || !prefs.autoPen) return;
       const topic = e.target.closest?.('.pg-topic');
+      const pic = e.target.closest?.('.pg-pic');
       if (!topic) return;
       e.preventDefault();
       ribbon.setTab('draw');
       setMode(prefs.tool);
-      inks.get(topic.dataset.id)?.down(e);
+      (pic ? pics.inkFor(pic.dataset.pic) : inks.get(topic.dataset.id))?.down(e);
     }, true);
     scroller.scrollTop = keep;
     ribbon.refresh();
@@ -220,6 +250,7 @@ export function pageView(root, nbId, pageId) {
         class: 'icon-btn pg-topic-del', title: 'Delete this heading and its notes', text: '✕',
         onclick: async () => {
           if (!(await confirmDialog('Delete these notes?', `"${t.heading || 'This part'}" and its annotations will be deleted.`))) return;
+          pics.dropTopicPics([t]);
           page.topics = page.topics.filter(x => x !== t);
           dirty = true; await flush(); render();
         },
@@ -265,6 +296,7 @@ export function pageView(root, nbId, pageId) {
   async function removeImage(img) {
     if (!(await confirmDialog('Remove photo?', 'Notes already written from it are kept.', 'Remove'))) return;
     page.images = page.images.filter(i => i !== img);
+    pics.forgetPhoto(img.file);
     await api.removeImage(nb.id, img.file);
     dirty = true; await flush();
     render();
@@ -323,8 +355,28 @@ export function pageView(root, nbId, pageId) {
           },
         });
         const bar = inkBar({ getMode: () => vmode, setMode: m => { vmode = m; bar.redraw(); }, history: vhist });
-        stage.append(h('div', { class: 'viewer-pic' }, pic, svg));
-        $('.viewer', el).append(h('div', { class: 'viewer-bar' }, bar), stage);
+        // Clip mode: drag a rectangle over part of the photo to send it to Clippings.
+        const marquee = h('div', { class: 'clip-marquee' });
+        const cutter = h('div', { class: 'clip-cutter', hidden: true }, marquee);
+        const clipBtn = h('button', { class: 'btn small', text: '✂ Clip a picture', title: 'Drag a box around a diagram to save it to Clippings', onclick: () => { cutter.hidden = !cutter.hidden; clipBtn.classList.toggle('primary', !cutter.hidden); } });
+        cutter.addEventListener('pointerdown', e => {
+          const r = cutter.getBoundingClientRect();
+          const x0 = e.clientX, y0 = e.clientY;
+          try { cutter.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+          const box = ev => ({ x: Math.max(r.left, Math.min(x0, ev.clientX)), y: Math.max(r.top, Math.min(y0, ev.clientY)), x2: Math.min(r.right, Math.max(x0, ev.clientX)), y2: Math.min(r.bottom, Math.max(y0, ev.clientY)) });
+          const move = ev => { const b = box(ev); marquee.style.cssText = `display:block;left:${b.x - r.left}px;top:${b.y - r.top}px;width:${b.x2 - b.x}px;height:${b.y2 - b.y}px`; };
+          const up = ev => {
+            cutter.removeEventListener('pointermove', move); cutter.removeEventListener('pointerup', up);
+            const b = box(ev);
+            marquee.style.display = 'none';
+            if (b.x2 - b.x < 16 || b.y2 - b.y < 16) return;
+            pics.addManualClip(img.file, { x: (b.x - r.left) / r.width, y: (b.y - r.top) / r.height, w: (b.x2 - b.x) / r.width, h: (b.y2 - b.y) / r.height });
+            toast('Saved to Clippings. Close this window and drag it into your notes.');
+          };
+          cutter.addEventListener('pointermove', move); cutter.addEventListener('pointerup', up);
+        });
+        stage.append(h('div', { class: 'viewer-pic' }, pic, svg, cutter));
+        $('.viewer', el).append(h('div', { class: 'viewer-bar' }, h('div', { class: 'row gap' }, bar, h('span', { class: 'rb-sep' }), clipBtn)), stage);
       },
       actions: [{ label: 'Done', kind: 'primary' }],
       onClose: () => { if (!disposed) render(); },
@@ -338,15 +390,18 @@ export function pageView(root, nbId, pageId) {
     if (!imgs.length) return toast('Add some photos first (Insert tab)');
     if (all && page.topics.length &&
       !(await confirmDialog('Rewrite the notes?', 'The current notes on this page, your edits and your annotations will be replaced.', 'Rewrite'))) return;
-    if (all) page.topics = [];
+    if (all) { pics.dropTopicPics(page.topics); page.topics = []; page.clips = []; }
     const batchSize = (await getSettings()).provider === 'ollama' ? 2 : 6; // local models handle fewer images at once
+    if (!(await checkBudget(Math.ceil(imgs.length / batchSize)))) return;
     let done = 0;
+    const found = []; // diagrams the AI spotted in the photos
     try {
       for (let i = 0; i < imgs.length; i += batchSize) {
         const batch = imgs.slice(i, i + batchSize);
         busy(`Reading photos ${i + 1}–${i + batch.length} of ${imgs.length} and writing notes…`);
         const res = await api.generate({ id: nb.id, files: batch.map(b => b.file), notebookName: nb.name, pageTitle: page.title, existingHeadings: page.topics.map(t => t.heading).filter(Boolean) });
         if (disposed) return busy(null);
+        found.push(...pics.addFigures(res.figures, batch));
         for (const sec of res.sections || []) {
           const hit = page.topics.find(t => t.heading && t.heading.trim().toLowerCase() === String(sec.heading).trim().toLowerCase());
           if (hit) hit.html += sectionHtml(sec, false);
@@ -357,8 +412,10 @@ export function pageView(root, nbId, pageId) {
         done += batch.length;
         dirty = true; await flush();
       }
+      const drawn = await pics.autoDraw(found);
+      if (found.length) { dirty = true; await flush(); }
       busy(null);
-      toast('Notes ready. Edit, highlight or draw on them, then try the Study tab.');
+      toast(found.length ? `Notes ready. ${plural(found.length, 'diagram')} found${drawn ? `, ${drawn} redrawn clean` : ''}: see Clippings at the bottom right.` : 'Notes ready. Edit, highlight or draw on them, then try the Study tab.');
     } catch (e) {
       fail(e);
       if (done) toast(`Stopped after ${done} of ${imgs.length} photos`);
@@ -412,7 +469,7 @@ export function pageView(root, nbId, pageId) {
   const ctrl = {
     nb, get page() { return page; },
     getMode: () => mode, setMode, exec, setFont, setSize, addComment, addTopic, flush, history, exportPdf,
-    choosePhotos: () => picker.click(), phoneCamera: phoneDialog, generate, addFiles,
+    choosePhotos: () => picker.click(), phoneCamera: phoneDialog, generate, addFiles, pics, choosePicture: () => picPicker.click(),
     newPhotos: () => (page ? page.images.filter(i => !i.processed).length : 0),
     inkCount: () => (page ? page.topics.reduce((n, t) => n + (t.ink?.length || 0), 0) : 0),
   };
@@ -430,6 +487,7 @@ export function pageView(root, nbId, pageId) {
     document.removeEventListener('mousedown', onDocDown);
     document.removeEventListener('paste', onPaste);
     document.removeEventListener('selectionchange', onSelection);
+    pics.dispose();
     urls.forEach(p => p.then(u => URL.revokeObjectURL(u)).catch(() => {}));
   };
 }

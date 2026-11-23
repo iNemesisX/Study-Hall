@@ -121,6 +121,7 @@ if (nbstore.api && !nbstore.list().length) await ensureWelcome().catch(e => cons
 store.onChange(() => { renderNav(current); ribbon.refresh(); });
 nbstore.onChange(() => { renderNav(current); ribbon.refresh(); });
 onAiChange(refreshAi);
+nbstore.api?.onUsage(() => refreshAi()); // an AI request was sent: update the counter and any limit warning
 window.addEventListener('hashchange', onHashChange);
 safely('app bar', renderAppbar);
 refreshAi().catch(() => {});

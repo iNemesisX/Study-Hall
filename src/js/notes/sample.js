@@ -21,6 +21,19 @@ const SAMPLE_NOTES = [
     { type: 'numbered', items: ['**Glycolysis** splits one glucose into two pyruvate. It needs no oxygen.', 'The **Krebs cycle** finishes breaking down the carbon, releasing $CO_2$.', 'The **electron transport chain** uses oxygen to make most of the ATP.'] },
     { type: 'example', text: 'How much ATP does one glucose give in total?', items: ['Glycolysis: 2 ATP', 'Krebs cycle: 2 ATP', 'Electron transport chain: about 28 ATP', 'Total: about 32 ATP'] }] },
 ];
+// A sample of what the AI's "clean diagram" looks like: shapes plus labels that can be edited and moved.
+const SAMPLE_DIAGRAM = {
+  width: 800, height: 330,
+  svg: '<rect x="40" y="110" width="190" height="110" rx="14" fill="#dbeafe" stroke="#1d4ed8" stroke-width="3"/><rect x="305" y="110" width="190" height="110" rx="14" fill="#dcfce7" stroke="#15803d" stroke-width="3"/><rect x="555" y="110" width="225" height="110" rx="14" fill="#fef3c7" stroke="#b45309" stroke-width="3"/>'
+    + '<line x1="232" y1="165" x2="290" y2="165" stroke="#475569" stroke-width="4"/><polygon points="288,155 304,165 288,175" fill="#475569"/><line x1="497" y1="165" x2="540" y2="165" stroke="#475569" stroke-width="4"/><polygon points="538,155 554,165 538,175" fill="#475569"/>',
+  labels: [
+    { text: 'Glycolysis', x: 135, y: 150 }, { text: '2 ATP', x: 135, y: 185 },
+    { text: 'Krebs cycle', x: 400, y: 150 }, { text: '2 ATP', x: 400, y: 185 },
+    { text: 'Electron transport chain', x: 667, y: 150 }, { text: 'about 28 ATP', x: 667, y: 185 },
+    { text: 'Cytoplasm', x: 135, y: 60, px: 135, py: 112 }, { text: 'Mitochondrion', x: 530, y: 60, px: 400, py: 112 },
+    { text: 'Glucose in', x: 135, y: 280, px: 60, py: 218 }, { text: 'Needs oxygen', x: 665, y: 280, px: 665, py: 218 },
+  ],
+};
 const SAMPLE_GUIDE = [
   { heading: 'Big picture', summary: 'A sample of what "Generate study guide" writes from a class\'s notes.', blocks: [
     { type: 'paragraph', text: 'Cells turn glucose and oxygen into ATP in three stages. Know **where** each stage happens, **what goes in and comes out**, and **why oxygen matters**.' }] },
@@ -47,7 +60,9 @@ export async function ensureWelcome() {
     const guides = await nbstore.addSection(nb, 'Study guides', { guides: true });
     const howTo = FEATURES.map(f => ({ heading: `${f.icon} ${f.title}`, summary: '', blocks: [{ type: 'paragraph', text: f.what }, { type: 'definition', term: 'Where', text: f.where }, { type: 'numbered', items: f.how }] }));
     await nbstore.addPage(nb, start, { title: 'Start here: what Study Hall can do', topics: topics(howTo) });
-    await nbstore.addPage(nb, start, { title: 'Sample notes: Cellular respiration', topics: topics(SAMPLE_NOTES) });
+    const sampleTopics = topics(SAMPLE_NOTES);
+    sampleTopics[1].pics = [{ id: uid(), kind: 'diagram', name: 'The three stages', diagram: SAMPLE_DIAGRAM, x: 56, y: null, w: 600, r: SAMPLE_DIAGRAM.height / SAMPLE_DIAGRAM.width, ink: [] }];
+    await nbstore.addPage(nb, start, { title: 'Sample notes: Cellular respiration', topics: sampleTopics });
     const plain = t => t.replace(/\[([^\]]+)\]\((https:[^)\s]+)\)/g, '$1'); // the note renderer has no links
     const ai = FAQ[0].items.filter(it => ['free', 'gemini', 'ollama', 'claude'].includes(it.id));
     await nbstore.addPage(nb, start, { title: 'Set up the AI (free)', topics: topics(ai.map(it => ({ heading: it.q, summary: '', blocks: it.a.map(b => (typeof b === 'string' ? { type: 'paragraph', text: plain(b) } : b.steps ? { type: 'numbered', items: b.steps.map(plain) } : { type: 'callout', text: plain(b.tip) })) }))) });
