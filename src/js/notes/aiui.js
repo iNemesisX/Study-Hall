@@ -93,6 +93,9 @@ export async function aiSettingsDialog(note) {
       <label class="select-wrap" style="margin-top:12px">How detailed should notes be?<select class="input" data-f="detail">
         ${[['concise', 'Concise: key ideas only'], ['detailed', 'Detailed: learn it from the notes'], ['exhaustive', 'Exhaustive: everything on the page']]
           .map(([v, t]) => `<option value="${v}" ${s.detail === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      <label class="select-wrap" style="margin-top:12px">Speed<select class="input" data-f="speed">
+        <option value="fast" ${s.speed !== 'thorough' ? 'selected' : ''}>Fast (recommended): the AI spends less time thinking</option>
+        <option value="thorough" ${s.speed === 'thorough' ? 'selected' : ''}>Thorough: slower, more careful with hard material</option></select></label>
       <label class="opt-row" style="margin-top:10px"><span>Draw clean versions of diagrams<br><span class="muted small">When photos contain diagrams, the AI also redraws each one as an editable diagram. Uses one extra AI request per diagram.</span></span>
         <input type="checkbox" class="switch" data-f="autodraw" ${s.autoDraw ? 'checked' : ''}></label>
       <label class="opt-row" style="margin-top:10px"><span>Check Ask AI answers with a web search<br><span class="muted small">Answers are always checked against Wikipedia (free). With this on, Gemini (paid key) or Claude searches the web instead and shows its sources. Uses one extra AI request per question, plus the search fee on your key. Free Gemini keys fall back to Wikipedia.</span></span>
@@ -130,7 +133,7 @@ export async function aiSettingsDialog(note) {
       { label: 'Cancel', kind: 'ghost' },
       { label: 'Save', kind: 'primary', onClick: async el => {
         if (provider === 'ollama' && !platform.ollama) { const st = $('[data-status]', el); st.textContent = 'Ollama isn\'t available in this version. Choose Gemini or Claude.'; st.className = 'ai-status bad'; return false; }
-        const patch = { provider, detail: $('[data-f="detail"]', el).value, autoDraw: $('[data-f="autodraw"]', el).checked, webSearch: $('[data-f="websearch"]', el).checked };
+        const patch = { provider, detail: $('[data-f="detail"]', el).value, autoDraw: $('[data-f="autodraw"]', el).checked, webSearch: $('[data-f="websearch"]', el).checked, speed: $('[data-f="speed"]', el).value };
         for (const p of Object.keys(PROVIDERS)) patch[p] = form(p);
         await api.setSettings(patch);
         listeners.forEach(fn => fn());

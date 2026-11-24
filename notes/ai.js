@@ -84,7 +84,30 @@ async function callClaude(ctx, { system, parts, schema, name, maxTokens }) {
   throw new Error('The model did not return a usable result. Try again.');
 }
 
-async function callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema = false, retried = false) {
+// How long Gemini may "think" before answering. Less thinking is much faster; notes and
+// answers are still checked by the schema. "thorough" in AI setup uses the model's default.
+function geminiThinking(ctx) {
+  if (ctx.speed === 'thorough' || ctx.noThinkingConfig) return null;
+  if (/gemini-3/.test(ctx.model)) return { thinkingLevel: 'low' };
+  if (/gemini-2\.5-flash/.test(ctx.model)) return { thinkingBudget: 512 };
+  return null;
+}
+// When Gemini is overloaded (HTTP 503/500/504): wait and retry twice, then switch to
+// another Gemini model from the key's own model list.
+const BUSY_WAITS = [2000, 6000];
+const geminiModelCache = new Map();
+async function geminiFallback(ctx) {
+  try {
+    if (!geminiModelCache.has(ctx.apiKey)) geminiModelCache.set(ctx.apiKey, await listModels({ ...ctx, provider: 'gemini' }));
+    const version = (m) => parseFloat((m.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+    const tried = new Set(ctx.triedModels || [ctx.model]);
+    const options = geminiModelCache.get(ctx.apiKey).filter((m) => /flash/.test(m) && !/preview|exp|thinking|8b|tuning/.test(m) && !tried.has(m))
+      .sort((a, b) => version(b) - version(a) || (/lite/.test(a) ? 1 : 0) - (/lite/.test(b) ? 1 : 0));
+    return options[0] || null;
+  } catch { return null; }
+}
+async function callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema = false, retried = false, busyTry = 0) {
+  const thinking = geminiThinking(ctx);
   const { res, body } = await http(`${URLS.gemini}/models/${encodeURIComponent(ctx.model)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': ctx.apiKey },
@@ -95,12 +118,14 @@ async function callGemini(ctx, { system, parts, schema, maxTokens }, legacySchem
         responseMimeType: 'application/json',
         [legacySchema ? 'responseSchema' : 'responseJsonSchema']: schema,
         maxOutputTokens: Math.max(maxTokens, 16000) * 2, // leaves room for the model's own reasoning
+        ...(thinking ? { thinkingConfig: thinking } : {}),
       },
     }),
   });
   if (!res.ok) {
     const msg = body?.error?.message || `HTTP ${res.status}`;
-    if (res.status === 400 && !legacySchema && /responseJsonSchema|Unknown name/i.test(msg)) return callGemini(ctx, { system, parts, schema, maxTokens }, true);
+    if (res.status === 400 && thinking && /thinking/i.test(msg)) { ctx.noThinkingConfig = true; return callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema, retried, busyTry); }
+    if (res.status === 400 && !legacySchema && /responseJsonSchema|Unknown name/i.test(msg)) return callGemini(ctx, { system, parts, schema, maxTokens }, true, retried, busyTry);
     if (/API key not valid|API_KEY_INVALID/i.test(msg) || res.status === 401 || res.status === 403) throw new Error('The Gemini API key was rejected. Check it in AI setup.');
     if (res.status === 404) throw new Error(`Gemini model not found: "${ctx.model}". Pick another in AI setup.`);
     if (res.status === 429) {
@@ -121,7 +146,20 @@ async function callGemini(ctx, { system, parts, schema, maxTokens }, legacySchem
       }
       throw new Error('Gemini\'s free per-minute limit was reached. Wait a minute and try again.');
     }
-    if (res.status === 503) throw new Error('Gemini is busy right now. Try again in a moment.');
+    if (res.status === 503 || res.status === 500 || res.status === 504 || /overloaded|UNAVAILABLE/i.test(msg)) {
+      if (busyTry < BUSY_WAITS.length) {
+        await sleep(BUSY_WAITS[busyTry] + Math.random() * 1000);
+        return callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema, retried, busyTry + 1);
+      }
+      const other = await geminiFallback(ctx);
+      if (other) {
+        ctx.triedModels = [...(ctx.triedModels || [ctx.model]), other];
+        ctx.model = other; // the page's AI notice then names the model that actually wrote it
+        ctx.noThinkingConfig = false;
+        return callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema, retried, 0);
+      }
+      throw new Error('Gemini is overloaded right now (this happens at busy times on Google\'s side). Study Hall tried again and tried other Gemini models. Wait a few minutes, or pick another model in AI setup.');
+    }
     throw new Error(`Gemini error: ${msg}`);
   }
   const cand = (body.candidates || [])[0];

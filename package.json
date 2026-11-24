@@ -1,7 +1,7 @@
 {
   "name": "study-hall",
   "productName": "Study Hall",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "description": "Class notebooks that turn photos into notes, flashcards, practice tests and study guides.",
   "main": "main.js",
   "private": true,

@@ -31,6 +31,7 @@ const fake = http.createServer((req, res) => {
     const doc = { title: 'T', sections: [{ heading: 'H', summary: 's', blocks: [{ type: 'paragraph', text: 'from ' + req.url.split('/')[1] }] }] };
     if (req.url.startsWith('/gemini/models/limited')) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerDayPerProjectPerModel-FreeTier', quotaValue: '20' }] }] } });
     if (req.url.startsWith('/gemini/models/busy')) { seen.busy = (seen.busy || 0) + 1; if (seen.busy === 1) return send(429, { error: { message: 'Quota exceeded', details: [{ violations: [{ quotaId: 'GenerateRequestsPerMinutePerProjectPerModel-FreeTier' }] }, { retryDelay: '1s' }] } }); }
+    if (req.url.startsWith('/gemini/models/gemini-overloaded')) { seen.over = (seen.over || 0) + 1; return send(503, { error: { message: 'The model is overloaded. Please try again later.', status: 'UNAVAILABLE' } }); }
     if (req.url.startsWith('/gemini/models?')) return send(200, { models: [{ name: 'models/gemini-3.5-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/gemini-x-tts', supportedGenerationMethods: ['generateContent'] }] });
     if (req.url.startsWith('/gemini/models/limited') === false && req.url.startsWith('/gemini/') && j.tools?.some(t => t.google_search)) {
       seen.geminiSearch = true;
@@ -42,7 +43,7 @@ const fake = http.createServer((req, res) => {
       return send(200, { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: JSON.stringify({ blocks: [{ type: 'paragraph', text: 'Impulse is F times the time.' }], check: { status: 'agrees', used: [1] } }) }] } }] });
     }
     if (req.url.startsWith('/gemini/')) {
-      seen.gemini = { url: req.url, key: req.headers['x-goog-api-key'], img: j.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/jpeg'), schema: !!j.generationConfig.responseJsonSchema, sys: !!j.systemInstruction };
+      seen.gemini = { url: req.url, key: req.headers['x-goog-api-key'], img: j.contents[0].parts.some(p => p.inlineData?.mimeType === 'image/jpeg'), schema: !!j.generationConfig.responseJsonSchema, sys: !!j.systemInstruction, think: j.generationConfig.thinkingConfig };
       return send(200, { candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '```json\n' + JSON.stringify(doc) + '\n```' }] } }] });
     }
     if (req.url.startsWith('/wiki?')) {
@@ -247,6 +248,14 @@ async function run(base) {
     check('with web search on, Gemini searches Google and the answer lists those sources', seen.geminiSearch && seen.askRef === 'a web search' && webAns.checkedWith === 'web' && webAns.sources[0].url === 'https://example.org/impulse');
     const freeAns = await ai.ask({ provider: 'gemini', apiKey: 'k', model: 'freekey' }, { ...askArgs, verify: 'web' });
     check('a free Gemini key falls back to Wikipedia and says why', freeAns.checkedWith === 'wikipedia' && /paid key/.test(freeAns.notice || ''));
+    const fast = await ai.generateNotes({ provider: 'gemini', apiKey: 'k', model: 'gemini-3.5-flash', detail: 'concise' }, args);
+    check('Gemini answers faster: less thinking time by default', !!fast.sections && seen.gemini.think?.thinkingLevel === 'low');
+    await ai.generateNotes({ provider: 'gemini', apiKey: 'k', model: 'gemini-3.5-flash', detail: 'concise', speed: 'thorough' }, args);
+    check('"Thorough" speed leaves Gemini\'s thinking at its default', !seen.gemini.think);
+    const busyCtx = { provider: 'gemini', apiKey: 'k2', model: 'gemini-overloaded-flash', detail: 'concise' };
+    const t0 = Date.now();
+    const rescued = await ai.generateNotes(busyCtx, args);
+    check('when Gemini is busy it retries, then switches to another Gemini model', seen.over === 3 && !!rescued.sections && busyCtx.model === 'gemini-3.5-flash' && Date.now() - t0 < 15000);
     check('model lists load', (await ai.listModels({ provider: 'gemini', apiKey: 'k' })).join() === 'gemini-3.5-flash' && (await ai.listModels({ provider: 'ollama', url: `${base}/ollama` })).join() === 'qwen3-vl:8b');
     process.env.STUDYHALL_MOCK = '1';
 

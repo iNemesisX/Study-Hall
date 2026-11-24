@@ -19,6 +19,15 @@ const api = nbstore.api;
 const MAX_EDGE = 2000; // px, long edge after downscale
 const NS = 'http://www.w3.org/2000/svg';
 
+/** Runs async tasks, at most `limit` at a time, returning their results in order. */
+async function pool(tasks, limit) {
+  const out = new Array(tasks.length);
+  let i = 0;
+  const worker = async () => { while (i < tasks.length) { const k = i++; out[k] = await tasks[k](); } };
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+  return out;
+}
+
 export function pageView(root, nbId, pageId) {
   const nb = nbstore.get(nbId);
   if (!api || !nb || !nbstore.findPage(nb, pageId)) return notFound(root, 'page');
@@ -209,10 +218,10 @@ export function pageView(root, nbId, pageId) {
         onkeydown: e => { if (e.key === 'Enter') { e.preventDefault(); ($('.pg-text', paper) || e.target).focus(); } },
       }),
       h('div', { class: 'pg-date', text: `${new Date(page.created || Date.now()).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}${page.kind === 'guide' ? '  ·  Study guide' : ''}` }),
-      aiNotice(),
       hasSources() ? sourcesTray(fresh) : null,
       page.topics.map(topicNode),
-      readonly ? null : page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere());
+      readonly ? null : page.topics.length ? h('button', { class: 'btn pg-add', text: '＋ Add a heading', onclick: addTopic }) : startHere(),
+      aiNotice()); // a small line at the end of the page
     applyPageFont();
     scroller = h('div', { class: 'pg-scroll', onscroll: () => ask.hideBubble() }, paper);
     root.replaceChildren(scroller, picker, camera, picPicker, docPicker, audioPicker, pics.dock());
@@ -592,7 +601,8 @@ export function pageView(root, nbId, pageId) {
       !(await confirmDialog('Rewrite the notes?', 'The current notes on this page, your edits and your annotations will be replaced.', 'Rewrite'))) return;
     const settings = await getSettings();
     const provider = settings.provider;
-    const batchSize = provider === 'ollama' ? 2 : 6; // local models handle fewer images at once
+    const batchSize = provider === 'ollama' ? 2 : 4; // local models handle fewer images at once
+    const parallel = provider === 'ollama' ? 1 : 3;  // cloud AIs: several requests at once is much faster
     // Rough request count: transcription (1 per 8 minutes, unless already written out), then one per batch / document / recording.
     const transcribeCost = recs.filter(r => !r.transcript).reduce((n, r) => n + Math.max(1, Math.ceil((r.seconds || 480) / 480)), 0);
     if (!(await checkBudget(Math.ceil(imgs.length / batchSize) + docs.length + recs.length + transcribeCost))) return;
@@ -619,37 +629,56 @@ export function pageView(root, nbId, pageId) {
           busy(`Listening to "${r.name}"…`);
           const { chunks, seconds } = await audioToChunks(await api.readImage(nb.id, r.file));
           r.seconds ||= Math.round(seconds);
-          let text = '';
-          for (let i = 0; i < chunks.length; i++) {
-            busy(`Writing out "${r.name}"${chunks.length > 1 ? `: part ${i + 1} of ${chunks.length}` : ''}…`);
-            text += `${(await api.transcribe({ bytes: chunks[i], mediaType: 'audio/wav', mode: 'lecture', part: i + 1, of: chunks.length })).text}\n\n`;
-            if (disposed) return busy(null);
-          }
-          r.transcript = text.trim();
+          let doneParts = 0;
+          busy(`Writing out "${r.name}"${chunks.length > 1 ? `: 0 of ${chunks.length} parts` : ''}…`);
+          const texts = await pool(chunks.map((c, i) => async () => {
+            const t = (await api.transcribe({ bytes: c, mediaType: 'audio/wav', mode: 'lecture', part: i + 1, of: chunks.length })).text;
+            if (chunks.length > 1) busy(`Writing out "${r.name}": ${++doneParts} of ${chunks.length} parts…`);
+            return t;
+          }), parallel);
+          if (disposed) return busy(null);
+          r.transcript = texts.join('\n\n').trim();
           dirty = true; await flush();
         }
         busy(`Writing notes from "${r.name}"…`);
         if (r.transcript) await merge(await api.generate({ ...base(), transcripts: [{ name: r.name, text: r.transcript }] }));
         r.processed = true; done++;
       }
-      // 2. Documents, one at a time.
+      // 2. Documents and photos: up to 3 requests at a time (1 for Ollama), merged in order.
+      const jobs = [];
       for (const d of docs) {
-        busy(`Reading "${d.name}" and writing notes…`);
-        const prepared = await prepareDoc(d, d.ext === 'pdf' && provider !== 'ollama' ? null : await api.readImage(nb.id, d.file), provider);
-        const args = prepared.pageImages ? { ...base(), imageBytes: prepared.pageImages } : { ...base(), docs: [prepared] };
-        await merge(await api.generate(args));
-        if (prepared.truncated) toast(`Only the first 20 pages of "${d.name}" were read with Ollama`);
-        d.processed = true; done++;
-        dirty = true; await flush();
+        jobs.push({ items: [d], batch: [], run: async () => {
+          const prepared = await prepareDoc(d, d.ext === 'pdf' && provider !== 'ollama' ? null : await api.readImage(nb.id, d.file), provider);
+          if (prepared.truncated) toast(`Only the first 20 pages of "${d.name}" were read with Ollama`);
+          return api.generate(prepared.pageImages ? { ...base(), imageBytes: prepared.pageImages } : { ...base(), docs: [prepared] });
+        } });
       }
-      // 3. Photos, a few at a time.
       for (let i = 0; i < imgs.length; i += batchSize) {
         const batch = imgs.slice(i, i + batchSize);
-        busy(`Reading photos ${i + 1}–${i + batch.length} of ${imgs.length} and writing notes…`);
-        await merge(await api.generate({ ...base(), files: batch.map(b => b.file) }), batch);
-        batch.forEach(b => { b.processed = true; });
-        done += batch.length;
-        dirty = true; await flush();
+        jobs.push({ items: batch, batch, run: () => api.generate({ ...base(), files: batch.map(b => b.file) }) });
+      }
+      if (jobs.length) {
+        busy(`Reading ${plural(docs.length + imgs.length, docs.length ? 'source' : 'photo')} and writing notes…`);
+        const results = jobs.map(() => null);
+        let next = 0, finished = 0;
+        // Results are merged in the order the sources were added, as soon as each is ready.
+        const mergeReady = async () => {
+          while (next < jobs.length && results[next]) {
+            const { res, job } = results[next++];
+            await merge(res, job.batch);
+            job.items.forEach(x => { x.processed = true; });
+            done += job.items.length;
+            dirty = true; await flush();
+          }
+        };
+        await pool(jobs.map((job, i) => async () => {
+          const res = await job.run();
+          results[i] = { res, job };
+          finished++;
+          if (jobs.length > 1) busy(`Writing notes: ${finished} of ${jobs.length} parts done…`);
+          await mergeReady();
+        }), parallel);
+        await mergeReady();
       }
       if (disposed) return busy(null);
       const drawn = await pics.autoDraw(found);

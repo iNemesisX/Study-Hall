@@ -83,7 +83,7 @@ function decode(entry) {
 }
 async function loadSettings() {
   const raw = await readJson(settingsFile(), {});
-  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false, webSearch: raw.webSearch === true };
+  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : null, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false, webSearch: raw.webSearch === true, speed: raw.speed === 'thorough' ? 'thorough' : 'fast' };
   for (const p of PROVIDERS) s[p] = { ...DEFAULTS[p], ...(raw[p] || {}) };
   if (raw.apiKey && !s.claude.key) { // settings saved by StudyDeck 1.3 (Claude only)
     s.claude.key = raw.apiKey; s.claude.enc = !!raw.apiKeyEncrypted;
@@ -97,7 +97,7 @@ async function loadSettings() {
 // Connection details for a provider; form values (not yet saved) win over saved ones.
 function ctxFor(s, provider, form = {}) {
   if (!PROVIDERS.includes(provider)) throw new Error('Unknown AI provider');
-  const ctx = { provider, detail: s.detail, model: String(form.model || s[provider].model || '').trim() };
+  const ctx = { provider, detail: s.detail, speed: s.speed, model: String(form.model || s[provider].model || '').trim() };
   if (provider === 'ollama') {
     ctx.url = String(form.url || s.ollama.url || DEFAULTS.ollama.url).trim().replace(/\/+$/, '');
     if (!/^https?:\/\/[^\s]+$/i.test(ctx.url)) throw new Error('The Ollama address should look like http://localhost:11434');
@@ -143,7 +143,7 @@ function register(guarded) {
     const s = await loadSettings();
     const mock = !!process.env.STUDYHALL_MOCK;
     const out = {
-      provider: s.provider, detail: s.detail, autoDraw: s.autoDraw, webSearch: s.webSearch,
+      provider: s.provider, detail: s.detail, autoDraw: s.autoDraw, webSearch: s.webSearch, speed: s.speed,
       gemini: { model: s.gemini.model, hasKey: mock || !!decode(s.gemini), dailyLimit: +s.gemini.dailyLimit || 0 },
       claude: { model: s.claude.model, hasKey: mock || !!decode(s.claude), dailyLimit: +s.claude.dailyLimit || 0 },
       ollama: { model: s.ollama.model, url: s.ollama.url },
@@ -153,7 +153,7 @@ function register(guarded) {
   });
   on('notes:settings:set', async (patch = {}) => {
     const s = await loadSettings();
-    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw, webSearch: typeof patch.webSearch === 'boolean' ? patch.webSearch : s.webSearch };
+    const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw, webSearch: typeof patch.webSearch === 'boolean' ? patch.webSearch : s.webSearch, speed: patch.speed === 'thorough' || patch.speed === 'fast' ? patch.speed : s.speed };
     for (const p of PROVIDERS) {
       next[p] = { ...s[p] };
       const f = patch[p] || {};

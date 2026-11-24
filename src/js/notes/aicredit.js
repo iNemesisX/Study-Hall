@@ -25,7 +25,9 @@ export function addBy(list, by) {
 /** Notice as HTML. what: e.g. "Notes on this page were written". */
 export function creditHtml(list, what, cls = '') {
   if (list?.some((b) => b.provider === 'sample')) {
+    if (cls === 'pg-credit') return `<div class="ai-credit ${cls}" contenteditable="false">✨ Sample content. Notes you generate show here which AI model wrote them, because ${WARNING.charAt(0).toLowerCase()}${WARNING.slice(1)}</div>`;
     return `<div class="ai-credit ${cls}" contenteditable="false"><span class="ai-credit-ico">✨</span><span><b>Sample content.</b> Notes you generate show here which AI model wrote them, because ${WARNING.charAt(0).toLowerCase()}${WARNING.slice(1)}</span></div>`;
   }
+  if (cls === 'pg-credit') return `<div class="ai-credit ${cls}" contenteditable="false" title="${esc(WARNING)}">✨ ${esc(what)} with ${esc(byText(list))}. ${esc(WARNING)}</div>`;
   return `<div class="ai-credit ${cls}" contenteditable="false" title="${esc(WARNING)}"><span class="ai-credit-ico">✨</span><span><b>${esc(what)} with ${esc(byText(list))}.</b> ${esc(WARNING)}</span></div>`;
 }

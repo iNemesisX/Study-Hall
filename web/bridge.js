@@ -74,7 +74,7 @@ ai.configure({ usage, ...(native ? { fetch: nativeFetch } : {}) });
 /* ---------- AI settings ---------- */
 async function loadSettings() {
   const raw = (await db.get('settings')) || {};
-  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : DEFAULTS.provider, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false, webSearch: raw.webSearch === true };
+  const s = { provider: PROVIDERS.includes(raw.provider) ? raw.provider : DEFAULTS.provider, detail: raw.detail || DEFAULTS.detail, autoDraw: raw.autoDraw !== false, webSearch: raw.webSearch === true, speed: raw.speed === 'thorough' ? 'thorough' : 'fast' };
   for (const p of PROVIDERS) s[p] = { ...DEFAULTS[p], ...(raw[p] || {}) };
   usage.setUserLimits({ gemini: +s.gemini.dailyLimit || 0, claude: +s.claude.dailyLimit || 0 });
   return s;
@@ -82,7 +82,7 @@ async function loadSettings() {
 function ctxFor(s, provider, form = {}) {
   if (!PROVIDERS.includes(provider)) throw new Error('Unknown AI provider');
   if (provider === 'ollama' && !platform.ollama) throw new Error('Ollama can\'t be used from the iPad or browser version. Use Google Gemini or Claude here, or Ollama from the desktop or Android app.');
-  const ctx = { provider, detail: s.detail, model: String(form.model || s[provider].model || '').trim() };
+  const ctx = { provider, detail: s.detail, speed: s.speed, model: String(form.model || s[provider].model || '').trim() };
   if (provider === 'ollama') {
     ctx.url = String(form.url || s.ollama.url).trim().replace(/\/+$/, '');
     if (!/^https?:\/\/[^\s]+$/i.test(ctx.url)) throw new Error('The Ollama address should look like http://192.168.1.10:11434');
@@ -174,7 +174,7 @@ window.studyhall = {
       const s = await loadSettings();
       const mock = !!globalThis.STUDYHALL_ENV.STUDYHALL_MOCK;
       const out = {
-        provider: s.provider, detail: s.detail, autoDraw: s.autoDraw, webSearch: s.webSearch,
+        provider: s.provider, detail: s.detail, autoDraw: s.autoDraw, webSearch: s.webSearch, speed: s.speed,
         gemini: { model: s.gemini.model, hasKey: mock || !!s.gemini.key, dailyLimit: +s.gemini.dailyLimit || 0 },
         claude: { model: s.claude.model, hasKey: mock || !!s.claude.key, dailyLimit: +s.claude.dailyLimit || 0 },
         ollama: { model: s.ollama.model, url: s.ollama.url },
@@ -184,7 +184,7 @@ window.studyhall = {
     },
     setSettings: async (patch = {}) => {
       const s = await loadSettings();
-      const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw, webSearch: typeof patch.webSearch === 'boolean' ? patch.webSearch : s.webSearch };
+      const next = { provider: PROVIDERS.includes(patch.provider) ? patch.provider : s.provider, detail: ['concise', 'detailed', 'exhaustive'].includes(patch.detail) ? patch.detail : s.detail, autoDraw: typeof patch.autoDraw === 'boolean' ? patch.autoDraw : s.autoDraw, webSearch: typeof patch.webSearch === 'boolean' ? patch.webSearch : s.webSearch, speed: patch.speed === 'thorough' || patch.speed === 'fast' ? patch.speed : s.speed };
       for (const p of PROVIDERS) {
         next[p] = { ...s[p] };
         const f = patch[p] || {};

@@ -44,6 +44,24 @@ Free keys have daily limits that reset at midnight Pacific time. On the free tie
 
 You can set a monthly spending limit in the Anthropic console so you are never charged more than you expect.
 
+### Why is the AI slow, and how do I make it faster?
+
+Most of the wait is the AI reading your material and writing. To speed it up:
+
+1. In **AI setup**, keep **Speed** on **Fast** (the default). The AI spends less time thinking before it writes. Use **Thorough** only for very hard material.
+2. Pick a **Flash** model for Gemini (the default is one). "Pro" models are slower.
+3. Set **How detailed** to **Concise** when you only need the key points.
+4. Turn off **Draw clean versions of diagrams** if you don't need them: each diagram is an extra request.
+5. With **Ollama**, speed depends on your computer. A smaller model or a computer with a graphics card is much faster; Gemini is usually quicker than a laptop.
+
+Study Hall already sends up to three photos, documents or recording parts to Gemini or Claude at the same time, so a page with many photos doesn't take much longer than one with a few.
+
+### What does "Gemini is overloaded" mean?
+
+Google's servers are busy for that model; it isn't your key or your internet. Study Hall waits and tries again twice, then automatically switches to another Gemini model your key can use (the notice at the bottom of the page says which model wrote the notes).
+
+If you still see the message, wait a few minutes, choose another model in **AI setup**, or use Claude or Ollama for a while.
+
 ### How do I run the AI on my own computer (Ollama)?
 
 This is free, private and works without internet, but it needs a strong PC: ideally a graphics card with about 8 GB of memory or more. It is slower than the online options and less accurate on handwriting.

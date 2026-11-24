@@ -60,6 +60,27 @@ export const FAQ = [
         ],
       },
       {
+        id: 'speed', q: 'Why is the AI slow, and how do I make it faster?',
+        a: [
+          'Most of the wait is the AI reading your material and writing. To speed it up:',
+          { steps: [
+            'In **AI setup**, keep **Speed** on **Fast** (the default). The AI spends less time thinking before it writes. Use **Thorough** only for very hard material.',
+            'Pick a **Flash** model for Gemini (the default is one). "Pro" models are slower.',
+            'Set **How detailed** to **Concise** when you only need the key points.',
+            'Turn off **Draw clean versions of diagrams** if you don\'t need them: each diagram is an extra request.',
+            'With **Ollama**, speed depends on your computer. A smaller model or a computer with a graphics card is much faster; Gemini is usually quicker than a laptop.',
+          ] },
+          'Study Hall already sends up to three photos, documents or recording parts to Gemini or Claude at the same time, so a page with many photos doesn\'t take much longer than one with a few.',
+        ],
+      },
+      {
+        id: 'gemini-busy', q: 'What does "Gemini is overloaded" mean?',
+        a: [
+          'Google\'s servers are busy for that model; it isn\'t your key or your internet. Study Hall waits and tries again twice, then automatically switches to another Gemini model your key can use (the notice at the bottom of the page says which model wrote the notes).',
+          'If you still see the message, wait a few minutes, choose another model in **AI setup**, or use Claude or Ollama for a while.',
+        ],
+      },
+      {
         id: 'ollama', q: 'How do I run the AI on my own computer (Ollama)?',
         action: 'ai',
         a: [
