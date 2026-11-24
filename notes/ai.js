@@ -42,31 +42,46 @@ const TOO_LONG = 'The response was cut off because it was too long. Try fewer ph
 /* ---------- providers ---------- */
 // parts: [{ text } | { image: { mediaType, data } }]
 
+// Newer Claude models (those that think before answering) refuse a forced tool call. For
+// them the tool is offered with tool_choice "auto" and a firm instruction to use it; a JSON
+// reply in plain text is accepted too. Models found to need this are remembered.
+const claudeNoForce = new Set();
 async function callClaude(ctx, { system, parts, schema, name, maxTokens }) {
   if (parts.some((p) => p.audio)) throw new Error('Claude can\'t listen to audio. Recordings are transcribed with Google Gemini: add a free Gemini key in AI setup.');
   const content = parts.map((p) => (p.text != null ? { type: 'text', text: p.text }
     : p.pdf ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: p.pdf.data } }
       : { type: 'image', source: { type: 'base64', media_type: p.image.mediaType, data: p.image.data } }));
+  const forced = !claudeNoForce.has(ctx.model);
   const { res, body } = await http(`${URLS.claude}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': ctx.apiKey, ...CLAUDE_HEADERS },
     body: JSON.stringify({
-      model: ctx.model, max_tokens: maxTokens, system,
+      model: ctx.model, max_tokens: forced ? maxTokens : maxTokens + 4000,
+      system: forced ? system : `${system}\n\nAlways reply by calling the "${name}" tool exactly once, with the complete result. Don't reply with plain text.`,
       tools: [{ name, description: 'Save the result.', input_schema: schema }],
-      tool_choice: { type: 'tool', name },
+      tool_choice: forced ? { type: 'tool', name } : { type: 'auto' },
       messages: [{ role: 'user', content }],
     }),
   });
   if (!res.ok) {
+    const msg = String(body?.error?.message || '');
+    if (forced && res.status === 400 && /tool_choice/i.test(msg) && /not supported/i.test(msg)) {
+      claudeNoForce.add(ctx.model);
+      return callClaude(ctx, { system, parts, schema, name, maxTokens });
+    }
     if (res.status === 401) throw new Error('The Claude API key was rejected. Check it in AI setup.');
     if (res.status === 404) throw new Error(`Claude model not found: "${ctx.model}". Pick another in AI setup.`);
     if (res.status === 429) throw new Error('Claude is rate-limiting this key. Wait a minute and try again.');
-    throw new Error(`Claude error: ${body?.error?.message || `HTTP ${res.status}`}`);
+    throw new Error(`Claude error: ${msg || `HTTP ${res.status}`}`);
   }
+  const block = (body.content || []).find((b) => b.type === 'tool_use' && (!b.name || b.name === name));
+  if (block) return block.input;
   if (body.stop_reason === 'max_tokens') throw new Error(TOO_LONG);
-  const block = (body.content || []).find((b) => b.type === 'tool_use');
-  if (!block) throw new Error('The model did not return a usable result. Try again.');
-  return block.input;
+  // No tool call: accept a JSON object written as text.
+  const text = (body.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+  const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1);
+  try { if (json) return JSON.parse(json); } catch { /* fall through */ }
+  throw new Error('The model did not return a usable result. Try again.');
 }
 
 async function callGemini(ctx, { system, parts, schema, maxTokens }, legacySchema = false, retried = false) {

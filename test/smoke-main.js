@@ -57,6 +57,11 @@ const fake = http.createServer((req, res) => {
       seen.ollama = { img: j.messages[1].images.length === 1, schema: typeof j.format === 'object', stream: j.stream };
       return send(200, { done_reason: 'stop', message: { content: JSON.stringify(doc) } });
     }
+    if (req.url === '/claude/messages' && j.model === 'claude-thinker') {
+      seen.thinker = (seen.thinker || []).concat(j.tool_choice?.type);
+      if (j.tool_choice?.type === 'tool') return send(400, { error: { message: 'tool_choice: type "tool" and "any" are not supported for this model.' } });
+      return send(200, { stop_reason: 'tool_use', content: [{ type: 'thinking', thinking: '...' }, { type: 'tool_use', name: j.tools[0].name, input: { ok: true } }] });
+    }
     if (req.url === '/claude/messages') {
       seen.claude = { key: req.headers['x-api-key'], tool: j.tool_choice?.name, img: j.messages[0].content.some(c => c.type === 'image') };
       return send(200, { stop_reason: 'tool_use', content: [{ type: 'tool_use', input: doc }] });
@@ -261,6 +266,11 @@ async function run(base) {
     check('dismissing hides the bar until the next level', await js(`return document.querySelector('#usagebar').hidden`));
     await js(`await window.studyhall.notes.makeCards({ notes: 'x', count: 3 }); await new Promise(r => setTimeout(r, 500));`);
     check('it comes back when the limit is reached', await js(`const b = document.querySelector('#usagebar'); return !b.hidden && b.classList.contains('max')`));
+    const mockWas = process.env.STUDYHALL_MOCK; delete process.env.STUDYHALL_MOCK;
+    const t1 = await ai.test({ provider: 'claude', apiKey: 'ck', model: 'claude-thinker' }).catch(e => (console.log('  ', e.message), false));
+    const t2 = await ai.test({ provider: 'claude', apiKey: 'ck', model: 'claude-thinker' }).catch(e => (console.log('  ', e.message), false));
+    process.env.STUDYHALL_MOCK = mockWas;
+    check('Claude models that refuse forced tools still work (and are remembered)', t1 && t2 && JSON.stringify(seen.thinker) === JSON.stringify(['tool', 'auto', 'auto']));
     await js(`await window.studyhall.notes.setSettings({ provider: 'ollama' }); (await import('./js/views/nav.js')).refreshAi(); await new Promise(r => setTimeout(r, 300));`);
     check('no limit warnings for the local AI', await js(`return document.querySelector('#usagebar').hidden`));
 
